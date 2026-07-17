@@ -1,70 +1,39 @@
-name: Auto Renew Bot-hosting
+name: Bot-hosting Auto Renew
 
 on:
+  # 定时运行（每天 UTC 00:00，即北京时间 08:00）
   schedule:
-    - cron: '0 1 * * *' # 每天UTC 1点 (北京时间9点, 一般都会推迟),自行根据服务到期时间调整
+    - cron: '0 0 * * *'
+  # 允许手动触发
   workflow_dispatch:
 
 jobs:
-  Renew-bot:
+  renew:
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
-
     steps:
-      - uses: actions/checkout@v6
+      - name: 检出代码
+        uses: actions/checkout@v4
 
-      - name: ⚙ 设置 Python
-        uses: actions/setup-python@v6
+      - name: 设置 Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.10'
 
-      - name: 🛠️ 安装系统依赖和 Python 依赖
+      - name: 安装依赖
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb x11-utils xdotool scrot fonts-noto-cjk jq wget
           pip install seleniumbase requests
-          seleniumbase install chromedriver
 
-      - name: ⚙ 设置代理 (sing-box)
-        continue-on-error: true
+      # 注意：GitHub Actions 自带 gh 命令行，无需额外安装
+      - name: 运行续期脚本
         env:
-          NODE_LINK: ${{ secrets.NODE_LINK }}
-        run: |
-          bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
-
-      - name: 🚀 运行续期脚本
-        env:
-          EMAIL: ${{ secrets.EMAIL }}
+          # 多账号 JSON（从 Secrets 读取）
+          ACCOUNTS: ${{ secrets.ACCOUNTS_JSON }}
+          # 用于自动更新 SESSION_TOKEN 的 GitHub PAT（需有 repo 权限）
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-          SESSION_TOKEN: ${{ secrets.SESSION_TOKEN }}
+          # Telegram 通知（可选）
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        run: |
-          xvfb-run --auto-servernum python3 app.py
-
-      - name: 🧽 清理进程和临时文件
-        if: always()
-        run: |
-          pkill -f sing-box || true
-          pkill -f chromedriver || true
-          pkill -f chrome || true
-          pkill -f Xvfb || true
-          rm -f sing-box sing-box-config.json sing-box.log
-
-      - name: 🧹 清理旧的工作流运行记录
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          runs=$(gh run list --workflow="${{ github.workflow }}" --limit=100 --json databaseId --jq '.[].databaseId')
-          count=0
-          for run_id in $runs; do
-            count=$((count + 1))
-            if [ $count -gt 1 ]; then
-              echo "删除运行记录: $run_id"
-              gh run delete $run_id || true
-            fi
-          done
+          # 代理配置（默认关闭）
+          IS_PROXY: false
+          HEADLESS: true   # 无头模式，建议开启
+        run: python renew.py
