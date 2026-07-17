@@ -610,7 +610,7 @@ def main():
         process_account(acc, idx)
         # 账号之间适当延迟，避免风控
         if idx < len(accounts) - 1:
-            wait_seconds = 30
+            wait_seconds = 180
             print(f"⏳ 等待 {wait_seconds} 秒后处理下一个账号...")
             time.sleep(wait_seconds)
 
