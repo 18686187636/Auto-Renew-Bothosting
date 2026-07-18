@@ -140,7 +140,6 @@ jobs:
           if type_ != 'tcp':
               outbound["transport"] = {"type": type_}
 
-          # Reality 支持 —— 保留 utls，同时添加 reality 字段
           if security == 'reality':
               pbk = params.get('pbk', [''])[0]
               sid = params.get('sid', [''])[0]
@@ -149,7 +148,7 @@ jobs:
                   "public_key": pbk,
                   "short_id": sid
               }
-              # 重要：不再删除 utls，因为 reality 客户端也需要它
+              # 保留 utls（Reality 也需要）
 
           config = {
               "log": {"level": "warn"},
@@ -179,6 +178,7 @@ jobs:
               echo "⚠️ 未生成配置文件，跳过代理"
           fi
 
+      # ---------- 运行续期脚本（文件名修正为 renew.py） ----------
       - name: 🚀 运行续期脚本
         env:
           ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
@@ -192,7 +192,7 @@ jobs:
           PROXY_SERVER: socks5://127.0.0.1:1080
           HEADLESS: true
         run: |
-          xvfb-run --auto-servernum python3 app.py
+          xvfb-run --auto-servernum python3 renew.py   # 修改此处
 
       - name: 🧽 清理进程和临时文件
         if: always()
