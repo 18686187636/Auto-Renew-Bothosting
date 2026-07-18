@@ -2,7 +2,7 @@ name: Auto Renew Bot-hosting
 
 on:
   schedule:
-    - cron: '0 10 * * *'   # 每天 UTC 10:00（北京时间 18:00）
+    - cron: '0 10 * * *'   # 每天 UTC 18:00（北京时间 9:00）
   workflow_dispatch:
 
 jobs:
@@ -28,28 +28,67 @@ jobs:
           pip install seleniumbase requests
           seleniumbase install chromedriver
 
-      # ---------- 修复后的代理配置 ----------
+      # ---------- 代理配置（支持 vless，带重试和稳定下载） ----------
       - name: 🔗 配置代理（sing-box）
         if: env.NODE_LINK != ''
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
           set -e
-          echo "⬇️ 下载 sing-box 二进制..."
-          # 使用 wget 下载并检查文件类型
-          wget -q -O sing-box.gz https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-amd64
-          # 如果下载的是 HTML（重定向）则失败
-          if file sing-box.gz | grep -q 'HTML'; then
-            echo "❌ 下载失败，文件不是二进制，可能是 GitHub 重定向问题"
+          echo "⬇️ 下载 sing-box 二进制（稳定版）..."
+
+          # 获取最新稳定版下载链接
+          LATEST_URL=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | \
+            grep -o '"browser_download_url": "[^"]*linux-amd64[^"]*"' | \
+            grep -v 'alpha\|beta\|rc' | \
+            head -1 | \
+            sed 's/"browser_download_url": "//' | \
+            sed 's/"//')
+
+          if [ -z "$LATEST_URL" ]; then
+            echo "❌ 无法获取下载链接"
             exit 1
           fi
-          gzip -d sing-box.gz
-          chmod +x sing-box
-          sudo mv sing-box /usr/local/bin/
+
+          echo "📥 下载地址: $LATEST_URL"
+
+          # 带重试的下载
+          for i in {1..3}; do
+            echo "尝试 $i/3..."
+            curl -L -o sing-box.tar.gz "$LATEST_URL" --connect-timeout 30 --max-time 60
+            if [ -f sing-box.tar.gz ] && file sing-box.tar.gz | grep -q 'gzip compressed data'; then
+              echo "✅ 下载成功"
+              break
+            fi
+            echo "⚠️ 下载失败，重试中..."
+            rm -f sing-box.tar.gz
+            sleep 3
+          done
+
+          if [ ! -f sing-box.tar.gz ]; then
+            echo "❌ 下载失败，跳过代理"
+            exit 0
+          fi
+
+          # 解压并安装
+          tar -xzf sing-box.tar.gz
+          SING_BOX_DIR=$(find . -maxdepth 1 -type d -name "sing-box-*" | head -1)
+          if [ -z "$SING_BOX_DIR" ]; then
+            echo "❌ 解压失败"
+            exit 1
+          fi
+          sudo mv "$SING_BOX_DIR/sing-box" /usr/local/bin/
+          sudo chmod +x /usr/local/bin/sing-box
+          rm -rf sing-box.tar.gz "$SING_BOX_DIR"
+
+          # 验证安装
+          if ! command -v sing-box &> /dev/null; then
+            echo "❌ sing-box 安装失败"
+            exit 1
+          fi
           sing-box version
 
           echo "📝 解析 vless 链接并生成配置文件..."
-          # 清理链接中的空白字符
           VLESS=$(echo "${NODE_LINK}" | tr -d ' \n\r\t')
           if [[ ! "$VLESS" =~ ^vless:// ]]; then
             echo "⚠️ 链接不是 vless:// 协议，跳过代理"
@@ -123,7 +162,7 @@ jobs:
           print("✅ 配置已生成")
           EOF
 
-          # 只有配置文件存在且有效时才启动
+          # 启动代理
           if [ -f sing-box-config.json ]; then
               echo "🚀 启动 sing-box 后台进程..."
               nohup sing-box -c sing-box-config.json run > sing-box.log 2>&1 &
@@ -149,7 +188,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          # 若代理启动成功，则使用本地 socks5，否则直连
           IS_PROXY: true
           PROXY_SERVER: socks5://127.0.0.1:1080
           HEADLESS: true
@@ -163,7 +201,7 @@ jobs:
           pkill -f chromedriver || true
           pkill -f chrome || true
           pkill -f Xvfb || true
-          rm -f sing-box sing-box.gz sing-box-config.json sing-box.log
+          rm -f sing-box sing-box.gz sing-box.tar.gz sing-box-config.json sing-box.log
 
       - name: 🧹 清理旧的工作流运行记录
         if: always()
