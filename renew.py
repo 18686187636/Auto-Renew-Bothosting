@@ -66,9 +66,14 @@ def format_notification(status, email, login_method="SESSION_TOKEN", extra="", e
 
 def get_current_ip(proxy_server=""):
     proxies = {"http": proxy_server, "https": proxy_server} if proxy_server else None
-    response = requests.get("https://api.ip.sb/ip", proxies=proxies, timeout=15)
-    response.raise_for_status()
-    return response.text.strip()
+    try:
+        response = requests.get("https://api.ip.sb/ip", proxies=proxies, timeout=15)
+        response.raise_for_status()
+        return response.text.strip()
+    except Exception as e:
+        # 容错：如果获取 IP 失败，打印警告但不中断流程
+        print(f"⚠️ 获取出口 IP 失败: {e}")
+        return "未知"
 
 def format_countdown(countdown_str):
     try:
@@ -132,7 +137,7 @@ def update_github_secret(secret_name, new_value):
         print(f"❌ 异常: {e}")
         return False
 
-# ---------- Discord OAuth (简化) ----------
+# ---------- Discord OAuth ----------
 DISCORD_CLIENT_ID = "884382422530158623"
 OAUTH_REDIRECT_URI = "https://bot-hosting.net/login"
 OAUTH_SCOPE = "identify email guilds"
@@ -231,11 +236,9 @@ def process_account(account, idx):
 
     login_method = "SESSION_TOKEN"
     with SB(**sb_kwargs) as sb:
-        try:
-            ip = get_current_ip(PROXY_SERVER if IS_PROXY else "")
-            print(f"📍 当前出口IP: {ip}")
-        except Exception as e:
-            print(f"⚠️ 获取出口 IP 失败: {e}")
+        # 获取出口 IP（容错，失败不中断）
+        ip = get_current_ip(PROXY_SERVER if IS_PROXY else "")
+        print(f"📍 当前出口IP: {ip}")
 
         # ---------- 登录 ----------
         login_ok = False
@@ -244,10 +247,18 @@ def process_account(account, idx):
             sb.open("https://bot-hosting.net/")
             sb.wait_for_ready_state_complete()
             sb.sleep(2)
+            # 确保当前页面是 bot-hosting.net
+            if "bot-hosting.net" not in sb.get_current_url():
+                print("⚠️ 页面未正确加载，尝试重新加载...")
+                sb.open("https://bot-hosting.net/")
+                sb.wait_for_ready_state_complete()
+                sb.sleep(2)
+
             print("📝 注入 Cookie...")
+            # 不指定 domain，让浏览器自动匹配
             for name, value in {"session_token": session_token, "login": "true", "theme": "system"}.items():
                 if value:
-                    sb.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
+                    sb.add_cookie({"name": name, "value": value})  # 移除 domain
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
             sb.open("https://bot-hosting.net/a/billings")
             sb.wait_for_ready_state_complete()
@@ -346,7 +357,7 @@ def process_account(account, idx):
                 # ---------- Turnstile 处理 ----------
                 print("🔒 处理 Turnstile 验证...")
                 try:
-                    sb.uc_click_captcha()  # 无头模式兼容
+                    sb.uc_click_captcha()
                     print("✅ Turnstile 点击已触发")
                 except Exception as e:
                     print(f"⚠️ Turnstile 点击异常: {e}")
@@ -362,7 +373,6 @@ def process_account(account, idx):
                             break
                     except:
                         pass
-                    # 每 8 秒重试点击 Turnstile
                     if wait_sec % 8 == 0 and wait_sec > 0:
                         try:
                             sb.uc_click_captcha()
@@ -372,7 +382,6 @@ def process_account(account, idx):
 
                 if not button_found:
                     print("❌ 续期按钮未出现，Turnstile 验证失败")
-                    # 关闭模态框
                     sb.driver.execute_script("""
                         var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
                         if (modal) modal.style.display = 'none';
@@ -380,16 +389,13 @@ def process_account(account, idx):
                     sb.sleep(2)
                     continue
 
-                # 点击续期按钮
                 print("⏳ 点击续期按钮...")
                 sb.click(renew_button_selector, timeout=5)
                 print("✅ 已点击续期按钮")
 
-                # 等待处理完成
                 print("⏳ 等待续期完成...")
                 sb.sleep(20)
 
-                # 刷新页面获取最新状态
                 sb.open("https://bot-hosting.net/a/billings")
                 sb.wait_for_ready_state_complete()
                 sb.sleep(8)
@@ -419,7 +425,6 @@ def process_account(account, idx):
                     break
                 else:
                     print("⚠️ 续期结果未知，到期日期未变化")
-                    # 再次刷新
                     sb.sleep(5)
                     sb.open("https://bot-hosting.net/a/billings")
                     sb.wait_for_ready_state_complete()
