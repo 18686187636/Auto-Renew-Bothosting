@@ -71,7 +71,6 @@ def get_current_ip(proxy_server=""):
         response.raise_for_status()
         return response.text.strip()
     except Exception as e:
-        # 容错：如果获取 IP 失败，打印警告但不中断流程
         print(f"⚠️ 获取出口 IP 失败: {e}")
         return "未知"
 
@@ -236,7 +235,7 @@ def process_account(account, idx):
 
     login_method = "SESSION_TOKEN"
     with SB(**sb_kwargs) as sb:
-        # 获取出口 IP（容错，失败不中断）
+        # 获取出口 IP（容错）
         ip = get_current_ip(PROXY_SERVER if IS_PROXY else "")
         print(f"📍 当前出口IP: {ip}")
 
@@ -244,21 +243,63 @@ def process_account(account, idx):
         login_ok = False
         if session_token:
             print("🚀 启动浏览器...")
-            sb.open("https://bot-hosting.net/")
-            sb.wait_for_ready_state_complete()
-            sb.sleep(2)
-            # 确保当前页面是 bot-hosting.net
-            if "bot-hosting.net" not in sb.get_current_url():
-                print("⚠️ 页面未正确加载，尝试重新加载...")
-                sb.open("https://bot-hosting.net/")
-                sb.wait_for_ready_state_complete()
-                sb.sleep(2)
+            # 加载页面，确保域正确
+            page_loaded = False
+            for attempt in range(1, 4):
+                try:
+                    sb.open("https://bot-hosting.net/")
+                    sb.wait_for_ready_state_complete()
+                    sb.sleep(2)
+                    current_url = sb.get_current_url()
+                    if "bot-hosting.net" in current_url:
+                        print(f"✅ 页面加载成功，域: bot-hosting.net (尝试 {attempt})")
+                        page_loaded = True
+                        break
+                    else:
+                        print(f"⚠️ 页面域不正确，当前 URL: {current_url}，重试 {attempt}/3")
+                        sb.refresh()
+                        sb.sleep(2)
+                except Exception as e:
+                    print(f"⚠️ 加载页面异常 (尝试 {attempt}): {e}")
+                    time.sleep(3)
+
+            if not page_loaded:
+                print("❌ 无法加载 bot-hosting.net，请检查代理或网络")
+                send_telegram_message(
+                    format_notification("❌ 登录失败", email, login_method, error="无法加载 bot-hosting.net")
+                )
+                return
+
+            # 再次确认域
+            current_url = sb.get_current_url()
+            if "bot-hosting.net" not in current_url:
+                print(f"❌ 当前域不是 bot-hosting.net，当前 URL: {current_url}")
+                send_telegram_message(
+                    format_notification("❌ 登录失败", email, login_method, error="域不匹配")
+                )
+                return
 
             print("📝 注入 Cookie...")
-            # 不指定 domain，让浏览器自动匹配
             for name, value in {"session_token": session_token, "login": "true", "theme": "system"}.items():
-                if value:
-                    sb.add_cookie({"name": name, "value": value})  # 移除 domain
+                if not value:
+                    continue
+                try:
+                    sb.add_cookie({"name": name, "value": value})
+                except Exception as e:
+                    print(f"⚠️ 添加 Cookie {name} 失败: {e}")
+                    # 尝试重新打开页面并重试
+                    try:
+                        sb.open("https://bot-hosting.net/")
+                        sb.wait_for_ready_state_complete()
+                        sb.sleep(2)
+                        sb.add_cookie({"name": name, "value": value})
+                    except Exception as e2:
+                        print(f"❌ 第二次添加 Cookie {name} 仍然失败: {e2}")
+                        send_telegram_message(
+                            format_notification("❌ 登录失败", email, login_method, error="Cookie 注入失败")
+                        )
+                        return
+
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
             sb.open("https://bot-hosting.net/a/billings")
             sb.wait_for_ready_state_complete()
