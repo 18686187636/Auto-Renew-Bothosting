@@ -1,39 +1,57 @@
+# .github/workflows/renew.yml
+# Bot-hosting 多账号自动续期工作流
+
 name: Bot-hosting Auto Renew
 
 on:
-  # 定时运行（每天 UTC 10:00，即北京时间 18:00）
+  # 定时触发：每天 UTC 10:00（北京时间 18:00）
   schedule:
     - cron: '0 10 * * *'
-  # 允许手动触发
+  # 手动触发（方便测试）
   workflow_dispatch:
 
 jobs:
   renew:
     runs-on: ubuntu-latest
+
     steps:
+      # 1. 检出仓库代码
       - name: 检出代码
         uses: actions/checkout@v4
 
+      # 2. 设置 Python 环境
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
+      # 3. 安装依赖
       - name: 安装依赖
         run: |
+          pip install --upgrade pip
           pip install seleniumbase requests
 
-      # 注意：GitHub Actions 自带 gh 命令行，无需额外安装
+      # 4. 执行续期脚本
       - name: 运行续期脚本
         env:
-          # 多账号 JSON（从 Secrets 读取）
-          ACCOUNTS: ${{ secrets.ACCOUNTS_JSON }}
-          # 用于自动更新 SESSION_TOKEN 的 GitHub PAT（需有 repo 权限）
+          # 账号信息（JSON 数组）—— 必须
+          ACCOUNTS: ${{ secrets.ACCOUNTS }}
+          # GitHub Personal Access Token（用于自动更新 SESSION_TOKEN）—— 推荐
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          # Telegram 通知（可选）
+          # Telegram 通知配置 —— 可选
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          # 代理配置（默认关闭）
-          IS_PROXY: false
-          HEADLESS: true   # 无头模式，建议开启
+          # 代理链接（例如 socks5://user:pass@host:port）—— 可选，建议使用 Secret
+          NODE_LINK: ${{ secrets.NODE_LINK }}
+          # 浏览器无头模式（建议保持 true）
+          HEADLESS: true
+          # 以下两项在设置了 NODE_LINK 后会被覆盖，可忽略
+          # IS_PROXY: false
+          # PROXY_SERVER: ""
         run: python renew.py
+
+      # （可选）如果脚本运行失败，可打印日志便于调试（但敏感信息已被掩盖）
+      - name: 打印运行日志（可选）
+        if: failure()
+        run: |
+          echo "脚本运行失败，请检查 Secrets 配置及网络环境。"
