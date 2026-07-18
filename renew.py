@@ -7,25 +7,23 @@ from datetime import datetime
 from seleniumbase import SB
 
 # ---------- 全局环境变量配置 ----------
-EMAIL         = os.environ.get("EMAIL") or ""           # 单账号邮箱（仅当未使用 ACCOUNTS 时）
-SESSION_TOKEN = os.environ.get("SESSION_TOKEN") or ""   # 单账号 session token
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") or ""   # 单账号 Discord Token
-GH_TOKEN      = os.environ.get("GH_TOKEN") or ""        # GitHub PAT token（用于更新 secret）
-TG_CHAT_ID    = os.environ.get("TG_CHAT_ID") or ""      # TG chat id
-TG_BOT_TOKEN  = os.environ.get("TG_BOT_TOKEN") or ""    # TG bot token
-# 注意：以下变量名兼容 ACCOUNTS_JSON 和 ACCOUNTS 两种写法
+EMAIL         = os.environ.get("EMAIL") or ""           
+SESSION_TOKEN = os.environ.get("SESSION_TOKEN") or ""   
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") or ""   
+GH_TOKEN      = os.environ.get("GH_TOKEN") or ""        
+TG_CHAT_ID    = os.environ.get("TG_CHAT_ID") or ""      
+TG_BOT_TOKEN  = os.environ.get("TG_BOT_TOKEN") or ""    
+# 兼容 ACCOUNTS_JSON 和 ACCOUNTS
 ACCOUNTS_JSON = os.environ.get("ACCOUNTS_JSON") or os.environ.get("ACCOUNTS") or ""
 
-# ---------- 代理相关（支持 NODE_LINK）----------
+# ---------- 代理相关 ----------
 IS_PROXY      = os.environ.get("IS_PROXY", "false").lower() == "true"
 PROXY_SERVER  = os.environ.get("PROXY_SERVER", "").strip() or "http://127.0.0.1:1080"
-NODE_LINK     = os.environ.get("NODE_LINK", "").strip()   # 新增：代理链接（如 vless://, vmess://, socks5:// 等）
-
-# 如果提供了 NODE_LINK，则优先使用它作为代理，并覆盖原有代理设置
+NODE_LINK     = os.environ.get("NODE_LINK", "").strip()
 if NODE_LINK:
     IS_PROXY = True
     PROXY_SERVER = NODE_LINK
-    print(f"🔗 使用 NODE_LINK 代理: {PROXY_SERVER[:50]}...")  # 打印前50字符以免泄露敏感信息
+    print(f"🔗 使用 NODE_LINK 代理: {PROXY_SERVER[:50]}...")
 else:
     if IS_PROXY:
         print(f"🔗 使用 PROXY_SERVER 代理: {PROXY_SERVER}")
@@ -36,7 +34,7 @@ HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"
 
 # ---------- 工具函数 ----------
 def send_telegram_message(message: str):
-    """发送 Telegram 通知（全局配置）"""
+    """发送 Telegram 通知"""
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         print("⚠️ Telegram 未配置，跳过通知")
         return
@@ -49,10 +47,8 @@ def send_telegram_message(message: str):
 
 def format_notification(status: str, email: str, login_method: str = "SESSION_TOKEN",
                         extra: str = "", error: str = "", expiry_date: str = "") -> str:
-    """生成通知文本（含账号邮箱）"""
     local_time = time.gmtime(time.time() + 8 * 3600)
     now = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
-    # 对邮箱做脱敏
     if '@' in email:
         name, domain = email.split('@', 1)
         if len(name) > 4:
@@ -80,7 +76,6 @@ def format_notification(status: str, email: str, login_method: str = "SESSION_TO
     return "\n".join(lines)
 
 def get_current_ip(proxy_server: str = "") -> str:
-    """获取当前出口 IP（使用 requests，支持代理）"""
     proxies = None
     if proxy_server:
         proxies = {"http": proxy_server, "https": proxy_server}
@@ -89,7 +84,6 @@ def get_current_ip(proxy_server: str = "") -> str:
     return response.text.strip()
 
 def format_countdown(countdown_str: str) -> str:
-    """格式化倒计时（HH:MM:SS -> 可读）"""
     try:
         h, m, _ = countdown_str.split(':')
         h = int(h)
@@ -102,7 +96,6 @@ def format_countdown(countdown_str: str) -> str:
         return countdown_str
 
 def extract_expiry_date(page_source: str) -> str:
-    """从页面源码提取到期日期"""
     patterns = [
         r"[Ee]xpires\s*[:\-]?\s*(\d{4}/\d{2}/\d{2})",
         r"[Ee]xpires\s*[:\-]?\s*(\d{2}/\d{2}/\d{4})",
@@ -114,7 +107,6 @@ def extract_expiry_date(page_source: str) -> str:
         match = re.search(pattern, page_source)
         if match:
             date_str = match.group(1)
-            # MM/DD/YYYY -> YYYY/MM/DD
             if len(date_str.split('/')[-1]) == 4:
                 parts = date_str.split('/')
                 if len(parts[0]) == 2:
@@ -123,7 +115,6 @@ def extract_expiry_date(page_source: str) -> str:
     return None
 
 def get_cookie_info(sb, name):
-    """获取指定 Cookie 的值和过期时间"""
     cookies = sb.get_cookies()
     for c in cookies:
         if c.get('name') == name:
@@ -134,7 +125,6 @@ def get_cookie_info(sb, name):
     return None, None
 
 def should_update_cookie(new_value, old_value, expiry_dt, days_threshold=3):
-    """判断是否需要更新 Cookie"""
     if new_value is None:
         return False
     if new_value != old_value:
@@ -146,7 +136,6 @@ def should_update_cookie(new_value, old_value, expiry_dt, days_threshold=3):
     return False
 
 def update_github_secret(secret_name, new_value):
-    """通过 gh 命令更新 GitHub Secret"""
     if not new_value:
         print(f"⚠️ 跳过更新 {secret_name}：新值为空")
         return False
@@ -171,7 +160,6 @@ def update_github_secret(secret_name, new_value):
         return False
 
 def wait_for_turnstile_pass(sb, timeout=30):
-    """等待 Turnstile 验证通过"""
     start = time.time()
     cf_indicators = ["verify you are human", "确认您是真人", "troubleshoot", "just a moment"]
     while time.time() - start < timeout:
@@ -183,7 +171,7 @@ def wait_for_turnstile_pass(sb, timeout=30):
     print("❌ Turnstile 验证超时未通过")
     return False
 
-# ---------- Discord OAuth 相关函数 ----------
+# ---------- Discord OAuth 相关 ----------
 DISCORD_CLIENT_ID   = "884382422530158623"
 OAUTH_REDIRECT_URI  = "https://bot-hosting.net/login"
 OAUTH_SCOPE         = "identify email guilds"
@@ -195,7 +183,6 @@ DISCORD_UA = (
 STATE_RE = re.compile(r"[?&]state=([^&]+)")
 
 def capture_discord_state(sb) -> str:
-    """从 /login/discord 页面提取 state"""
     print("🔎 获取 Discord OAuth state...")
     sb.uc_open_with_reconnect("https://bot-hosting.net/login/discord", reconnect_time=4)
     time.sleep(2)
@@ -212,7 +199,6 @@ def capture_discord_state(sb) -> str:
     return state
 
 def discord_authorize(state: str, discord_token: str) -> str:
-    """使用 Discord Token 完成授权，返回回调 URL（代理全局）"""
     query = urllib.parse.urlencode({
         "client_id":     DISCORD_CLIENT_ID,
         "response_type": "code",
@@ -271,7 +257,6 @@ def discord_authorize(state: str, discord_token: str) -> str:
     return location
 
 def do_discord_login(sb, discord_token: str) -> bool:
-    """通过 Discord OAuth 登录 bot-hosting.net"""
     print("\n🔑 通过 Discord Token 登录...")
     state = capture_discord_state(sb)
     if not state:
@@ -318,29 +303,21 @@ def do_discord_login(sb, discord_token: str) -> bool:
 
 # ---------- 核心处理函数 ----------
 def process_account(account: dict, idx: int):
-    """
-    处理单个账号的续期流程
-    :param account: 包含 email, session_token, discord_token, secret_name(可选) 的字典
-    :param idx: 账号索引（用于生成 secret 名称等）
-    """
     email = account.get("email", f"账号{idx+1}")
     session_token = account.get("session_token", "")
     discord_token = account.get("discord_token", "")
-    secret_name = account.get("secret_name", None)  # 自定义 secret 名
+    secret_name = account.get("secret_name", None)
 
-    # 如果没有 token 则跳过
     if not session_token and not discord_token:
         print(f"⚠️ 账号 {email} 既无 SESSION_TOKEN 也无 DISCORD_TOKEN，跳过")
         return
 
-    # 确定 secret 名称（用于更新）
     if not secret_name:
         if idx == 0:
             secret_name = "SESSION_TOKEN"
         else:
             secret_name = f"SESSION_TOKEN_{idx}"
 
-    # 构造浏览器参数（使用全局代理和 Headless）
     sb_kwargs = {"uc": True, "headless": HEADLESS}
     if IS_PROXY:
         print(f"🔗 挂载代理: {PROXY_SERVER[:50]}...")
@@ -350,7 +327,6 @@ def process_account(account: dict, idx: int):
 
     login_method = "SESSION_TOKEN"
     with SB(**sb_kwargs) as sb:
-        # 打印当前 IP
         try:
             ip = get_current_ip(PROXY_SERVER if IS_PROXY else "")
             print(f"📍 当前出口IP: {ip}")
@@ -359,7 +335,6 @@ def process_account(account: dict, idx: int):
 
         login_ok = False
 
-        # 方式1: SESSION_TOKEN Cookie 登录
         if session_token:
             print("🚀 启动浏览器...")
             sb.open("https://bot-hosting.net/")
@@ -390,7 +365,6 @@ def process_account(account: dict, idx: int):
             else:
                 print(f"❌ SESSION_TOKEN 登录失败，当前URL: {current_url}, 当前标题: {current_title}")
 
-        # 方式2: Discord OAuth 登录（备用）
         if not login_ok and discord_token:
             login_method = "Discord Token"
             print("\n🔄 SESSION_TOKEN 登录失败或未配置，尝试 Discord OAuth 登录...")
@@ -421,7 +395,6 @@ def process_account(account: dict, idx: int):
             )
             return
 
-        # 提取当前到期日期
         sb.sleep(2)
         page_source = sb.get_page_source()
         current_expiry = extract_expiry_date(page_source)
@@ -430,7 +403,6 @@ def process_account(account: dict, idx: int):
         else:
             print("⚠️ 未能提取当前到期日期")
 
-        # 寻找外部续期按钮
         outer_renew_selector = None
         countdown_text = None
         possible_selectors = [
@@ -456,7 +428,6 @@ def process_account(account: dict, idx: int):
             except Exception:
                 pass
 
-        # 点击外部续期按钮并处理弹窗
         if outer_renew_selector:
             print("🔄 点击外部续期按钮，等待验证窗口...")
             try:
@@ -474,11 +445,15 @@ def process_account(account: dict, idx: int):
             turnstile_passed = False
             for attempt in range(1, 4):
                 try:
-                    sb.uc_gui_click_captcha()
-                    time.sleep(12)
+                    # ------------------ 核心修改 ------------------
+                    # 使用无头模式兼容的点击方法
+                    sb.uc_click_captcha()
+                    # -------------------------------------------
+                    time.sleep(15)  # 增加等待时间
                 except Exception as e:
                     print(f"⚠️ 点击 Turnstile 出错: {e}")
-                if wait_for_turnstile_pass(sb, timeout=20):
+
+                if wait_for_turnstile_pass(sb, timeout=25):
                     turnstile_passed = True
                     break
                 else:
@@ -502,7 +477,6 @@ def process_account(account: dict, idx: int):
             print("⏳ 等待新的过期时间...")
             sb.sleep(6)
 
-            # 提取新的到期日期和倒计时
             new_page_text = sb.get_page_source()
             new_expiry = extract_expiry_date(new_page_text)
             new_match = re.search(r"Renew in (\d{2}:\d{2}:\d{2})", new_page_text)
@@ -558,7 +532,6 @@ def process_account(account: dict, idx: int):
                     )
                 )
 
-        # 更新 SESSION_TOKEN（如果需要）
         print("🔄 检查 SESSION_TOKEN 是否需要更新")
         new_token, token_expiry = get_cookie_info(sb, "session_token")
         old_token = session_token
@@ -577,11 +550,9 @@ def process_account(account: dict, idx: int):
 
         print(f"🏁 账号 {email} 处理完毕")
 
-# ---------- 账号列表构建 ----------
+# ---------- 账号构建 ----------
 def build_accounts():
-    """从环境变量构建账号列表"""
     accounts = []
-    # 兼容两种环境变量名：ACCOUNTS_JSON 或 ACCOUNTS
     if ACCOUNTS_JSON:
         try:
             accounts = json.loads(ACCOUNTS_JSON)
@@ -594,13 +565,12 @@ def build_accounts():
         except json.JSONDecodeError:
             print("⚠️ ACCOUNTS_JSON 解析失败，回退到单账号模式")
 
-    # 单账号模式：从传统环境变量构建
     if SESSION_TOKEN or DISCORD_TOKEN:
         account = {
             "email": EMAIL or "default@example.com",
             "session_token": SESSION_TOKEN,
             "discord_token": DISCORD_TOKEN,
-            "secret_name": "SESSION_TOKEN"  # 保持原有 secret 名
+            "secret_name": "SESSION_TOKEN"
         }
         accounts.append(account)
         print("ℹ️ 使用单账号模式（从 EMAIL/SESSION_TOKEN/DISCORD_TOKEN 构建）")
@@ -623,7 +593,6 @@ def main():
     for idx, acc in enumerate(accounts):
         print(f"\n{'='*30} 处理第 {idx+1}/{len(accounts)} 个账号 {'='*30}")
         process_account(acc, idx)
-        # 账号之间适当延迟，避免风控
         if idx < len(accounts) - 1:
             wait_seconds = 30
             print(f"⏳ 等待 {wait_seconds} 秒后处理下一个账号...")
