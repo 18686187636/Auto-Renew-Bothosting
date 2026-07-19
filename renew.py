@@ -367,10 +367,9 @@ def process_account(account, idx):
             current_expiry = None
             print("⚠️ 获取页面源码失败")
 
-        # ---------- 查找外部续期按钮（改用 XPath） ----------
+        # ---------- 查找外部续期按钮（XPath 列表） ----------
         outer_renew_selector = None
         countdown_text = None
-        # 定义 XPath 选择器列表（按优先级）
         xpath_selectors = [
             '//button[contains(text(),"Renew free plan")]',
             '//a[contains(text(),"Renew free plan")]',
@@ -436,10 +435,8 @@ def process_account(account, idx):
                 sb.sleep(5)
                 sb.save_screenshot(f"after_click_renew_{email}_{int(time.time())}.png")
 
-                # ---------- 强化 Turnstile 处理 ----------
+                # ---------- Turnstile 处理（保持不变） ----------
                 print("🔒 处理 Turnstile 验证...")
-
-                # 1. 等待模态框出现（扩大选择器范围）
                 modal_selector = '.modal, .overlay, [role="dialog"], .challenge-modal, .popup, .dialog'
                 modal_found = False
                 for _ in range(15):
@@ -453,7 +450,6 @@ def process_account(account, idx):
                 if not modal_found:
                     print("⚠️ 未检测到模态框，可能页面未正常弹出")
                     sb.save_screenshot(f"no_modal_{email}_{int(time.time())}.png")
-                    # 尝试点击页面其他区域重新触发
                     sb.execute_script("window.scrollTo(0, 0);")
                     try:
                         sb.click(outer_renew_selector)
@@ -463,7 +459,6 @@ def process_account(account, idx):
                 else:
                     sb.save_screenshot(f"modal_found_{email}_{int(time.time())}.png")
 
-                # 2. 等待 Turnstile iframe 出现
                 iframe_selector = 'iframe[src*="turnstile"], iframe[src*="cloudflare"], iframe[src*="challenge"]'
                 iframe_found = False
                 for _ in range(15):
@@ -539,19 +534,21 @@ def process_account(account, idx):
                         except:
                             pass
 
-                # 等待模态框内续期按钮出现（使用 XPath）
-                renew_button_xpath = '//button[contains(text(),"Renew for 4 days")]'
+                # ---------- 关键修改：使用绝对 XPath + 强制等待 60 秒 ----------
+                # 用户提供的绝对 XPath
+                renew_button_xpath = '/html/body/div/div[1]/div[3]/main/div/div[2]/div[2]/div[2]/button'
                 button_found = False
-                for wait_sec in range(50):
+                print("⏳ 强制等待按钮加载（最长 60 秒）...")
+                for wait_sec in range(60):
                     try:
                         if sb.is_element_visible(renew_button_xpath, timeout=1):
                             button_found = True
-                            print("✅ 续期按钮已出现，验证通过")
+                            print(f"✅ 续期按钮已出现 (等待 {wait_sec+1} 秒)")
                             sb.save_screenshot(f"renew_button_found_{email}_{int(time.time())}.png")
                             break
                     except:
                         pass
-                    # 每 10 秒重试点击 Turnstile
+                    # 每 10 秒重试点击 Turnstile（以防验证未完成）
                     if wait_sec % 10 == 0 and wait_sec > 0:
                         try:
                             if iframe_found:
@@ -580,7 +577,7 @@ def process_account(account, idx):
                     sb.sleep(2)
                     continue
 
-                # 点击续期按钮（使用 XPath）
+                # 点击续期按钮
                 print("⏳ 点击续期按钮...")
                 sb.click(renew_button_xpath, timeout=5)
                 print("✅ 已点击续期按钮")
