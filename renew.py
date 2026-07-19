@@ -367,28 +367,29 @@ def process_account(account, idx):
             current_expiry = None
             print("⚠️ 获取页面源码失败")
 
-        # ---------- 查找外部续期按钮 ----------
+        # ---------- 查找外部续期按钮（改用 XPath） ----------
         outer_renew_selector = None
         countdown_text = None
-        possible_selectors = [
-            'button:contains("Renew")',
-            'button:contains("Renew free plan")',
-            'a:contains("Renew")',
-            '[class*="renew"]',
-            '[class*="Renew"]',
+        # 定义 XPath 选择器列表（按优先级）
+        xpath_selectors = [
+            '//button[contains(text(),"Renew free plan")]',
+            '//a[contains(text(),"Renew free plan")]',
+            '//button[contains(text(),"Renew")]',
+            '//a[contains(text(),"Renew")]',
+            '//*[contains(@class,"renew") and contains(text(),"Renew")]',
         ]
-        for selector in possible_selectors:
+        for xp in xpath_selectors:
             try:
-                if sb.is_element_visible(selector):
-                    button_text = sb.get_text(selector)
+                if sb.is_element_visible(xp):
+                    button_text = sb.get_text(xp)
                     if "Renew in" in button_text:
                         match = re.search(r"Renew in (\d{2}:\d{2}:\d{2})", button_text)
                         if match:
                             countdown_text = match.group(1)
                         break
                     elif "Renew" in button_text and "in" not in button_text.lower():
-                        outer_renew_selector = selector
-                        print(f"✅ 续期按钮可用: '{button_text}'")
+                        outer_renew_selector = xp
+                        print(f"✅ 续期按钮可用: '{button_text}' (XPath: {xp})")
                         break
             except:
                 pass
@@ -438,8 +439,8 @@ def process_account(account, idx):
                 # ---------- 强化 Turnstile 处理 ----------
                 print("🔒 处理 Turnstile 验证...")
 
-                # 1. 等待模态框出现
-                modal_selector = '.modal, .overlay, [role="dialog"], .challenge-modal'
+                # 1. 等待模态框出现（扩大选择器范围）
+                modal_selector = '.modal, .overlay, [role="dialog"], .challenge-modal, .popup, .dialog'
                 modal_found = False
                 for _ in range(15):
                     try:
@@ -454,7 +455,10 @@ def process_account(account, idx):
                     sb.save_screenshot(f"no_modal_{email}_{int(time.time())}.png")
                     # 尝试点击页面其他区域重新触发
                     sb.execute_script("window.scrollTo(0, 0);")
-                    sb.click(outer_renew_selector)
+                    try:
+                        sb.click(outer_renew_selector)
+                    except:
+                        pass
                     sb.sleep(3)
                 else:
                     sb.save_screenshot(f"modal_found_{email}_{int(time.time())}.png")
@@ -535,12 +539,12 @@ def process_account(account, idx):
                         except:
                             pass
 
-                # 等待模态框内续期按钮出现
-                renew_button_selector = 'button:contains("Renew for 4 days")'
+                # 等待模态框内续期按钮出现（使用 XPath）
+                renew_button_xpath = '//button[contains(text(),"Renew for 4 days")]'
                 button_found = False
                 for wait_sec in range(50):
                     try:
-                        if sb.is_element_visible(renew_button_selector, timeout=1):
+                        if sb.is_element_visible(renew_button_xpath, timeout=1):
                             button_found = True
                             print("✅ 续期按钮已出现，验证通过")
                             sb.save_screenshot(f"renew_button_found_{email}_{int(time.time())}.png")
@@ -576,8 +580,9 @@ def process_account(account, idx):
                     sb.sleep(2)
                     continue
 
+                # 点击续期按钮（使用 XPath）
                 print("⏳ 点击续期按钮...")
-                sb.click(renew_button_selector, timeout=5)
+                sb.click(renew_button_xpath, timeout=5)
                 print("✅ 已点击续期按钮")
                 sb.save_screenshot(f"clicked_renew_button_{email}_{int(time.time())}.png")
 
