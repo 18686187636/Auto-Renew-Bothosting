@@ -630,8 +630,8 @@ def main():
         print(f"\n{'='*30} 处理第 {idx+1}/{len(accounts)} 个账号 {'='*30}")
         process_account(acc, idx)
         if idx < len(accounts) - 1:
-            print("⏳ 等待 30 秒后处理下一个账号...")
-            time.sleep(30)
+            print("⏳ 等待 3分钟 后处理下一个账号...")
+            time.sleep(180)
 
     print("\n✅ 所有账号处理完成。")
 
