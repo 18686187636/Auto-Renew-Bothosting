@@ -101,9 +101,12 @@ def extract_expiry_date(page_source):
     return None
 
 def get_cookie_info(sb, name):
-    for c in sb.get_cookies():
-        if c.get('name') == name:
-            return c.get('value'), datetime.fromtimestamp(c.get('expiry')) if c.get('expiry') else None
+    try:
+        for c in sb.get_cookies():
+            if c.get('name') == name:
+                return c.get('value'), datetime.fromtimestamp(c.get('expiry')) if c.get('expiry') else None
+    except:
+        pass
     return None, None
 
 def should_update_cookie(new_value, old_value, expiry_dt, days_threshold=3):
@@ -145,15 +148,18 @@ STATE_RE = re.compile(r"[?&]state=([^&]+)")
 
 def capture_discord_state(sb):
     print("🔎 获取 Discord OAuth state...")
-    sb.uc_open_with_reconnect("https://bot-hosting.net/login/discord", reconnect_time=4)
-    time.sleep(2)
-    url = sb.get_current_url()
-    if "discord.com" not in url:
+    try:
+        sb.uc_open_with_reconnect("https://bot-hosting.net/login/discord", reconnect_time=4)
+        time.sleep(2)
+        url = sb.get_current_url()
+        if "discord.com" not in url:
+            return ""
+        m = STATE_RE.search(url)
+        if not m:
+            return ""
+        return urllib.parse.unquote(m.group(1))
+    except:
         return ""
-    m = STATE_RE.search(url)
-    if not m:
-        return ""
-    return urllib.parse.unquote(m.group(1))
 
 def discord_authorize(state, discord_token):
     query = urllib.parse.urlencode({
@@ -203,16 +209,19 @@ def do_discord_login(sb, discord_token):
     location = discord_authorize(state, discord_token)
     if not location:
         return False
-    sb.uc_open_with_reconnect(location, reconnect_time=4)
-    time.sleep(3)
-    if "/error/banned" in sb.get_current_url():
-        print("🚫 账号已被封禁")
+    try:
+        sb.uc_open_with_reconnect(location, reconnect_time=4)
+        time.sleep(3)
+        if "/error/banned" in sb.get_current_url():
+            print("🚫 账号已被封禁")
+            return False
+        for _ in range(30):
+            url = sb.get_current_url()
+            if "bot-hosting.net" in url and "/login" not in url and not url.startswith("https://bot-hosting.net/login"):
+                return True
+            time.sleep(0.5)
+    except:
         return False
-    for _ in range(30):
-        url = sb.get_current_url()
-        if "bot-hosting.net" in url and "/login" not in url and not url.startswith("https://bot-hosting.net/login"):
-            return True
-        time.sleep(0.5)
     return False
 
 # ---------- 核心处理 ----------
@@ -226,7 +235,13 @@ def process_account(account, idx):
         print(f"⚠️ 账号 {email} 缺少 Token，跳过")
         return
 
-    sb_kwargs = {"uc": True, "headless": HEADLESS}
+    sb_kwargs = {
+        "uc": True,
+        "headless": HEADLESS,
+        "page_load_strategy": "eager",        # 减少等待时间
+        "timeout": 30,                        # 全局超时
+        "implicitly_wait": 5,
+    }
     if IS_PROXY:
         print(f"🔗 挂载代理: {PROXY_SERVER[:50]}...")
         sb_kwargs["proxy"] = PROXY_SERVER
@@ -243,7 +258,6 @@ def process_account(account, idx):
         login_ok = False
         if session_token:
             print("🚀 启动浏览器...")
-            # 加载页面并确认域
             page_loaded = False
             for attempt in range(1, 4):
                 try:
@@ -299,42 +313,56 @@ def process_account(account, idx):
                         return
 
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
-            sb.open("https://bot-hosting.net/a/billings")
-            sb.wait_for_ready_state_complete()
-            sb.sleep(3)
-            current_url = sb.get_current_url()
-            if "/a/billings" in current_url and "/login" not in current_url:
-                login_ok = True
-                print("✅ SESSION_TOKEN 登录成功")
-            else:
-                print(f"❌ SESSION_TOKEN 登录失败，当前URL: {current_url}")
+            try:
+                sb.open("https://bot-hosting.net/a/billings")
+                sb.wait_for_ready_state_complete()
+                sb.sleep(3)
+                current_url = sb.get_current_url()
+                if "/a/billings" in current_url and "/login" not in current_url:
+                    login_ok = True
+                    print("✅ SESSION_TOKEN 登录成功")
+                else:
+                    print(f"❌ SESSION_TOKEN 登录失败，当前URL: {current_url}")
+            except Exception as e:
+                print(f"❌ 访问账单页异常: {e}")
+                send_telegram_message(
+                    format_notification("❌ 登录失败", email, login_method, error="访问账单页失败")
+                )
+                return
 
         if not login_ok and discord_token:
             login_method = "Discord Token"
             print("\n🔄 尝试 Discord OAuth 登录...")
             if do_discord_login(sb, discord_token):
-                print("🌐 访问 https://bot-hosting.net/a/billings ...")
-                sb.open("https://bot-hosting.net/a/billings")
-                sb.wait_for_ready_state_complete()
-                sb.sleep(3)
-                if "/a/billings" in sb.get_current_url():
-                    login_ok = True
-                    print("✅ Discord OAuth 登录成功")
-                else:
-                    print("❌ Discord OAuth 后未到达账单页")
+                try:
+                    print("🌐 访问 https://bot-hosting.net/a/billings ...")
+                    sb.open("https://bot-hosting.net/a/billings")
+                    sb.wait_for_ready_state_complete()
+                    sb.sleep(3)
+                    if "/a/billings" in sb.get_current_url():
+                        login_ok = True
+                        print("✅ Discord OAuth 登录成功")
+                    else:
+                        print("❌ Discord OAuth 后未到达账单页")
+                except:
+                    pass
 
         if not login_ok:
             send_telegram_message(format_notification("❌ 登录失败", email, login_method, error="登录失败"))
             return
 
         # ---------- 获取当前到期日期 ----------
-        sb.sleep(2)
-        page_source = sb.get_page_source()
-        current_expiry = extract_expiry_date(page_source)
-        if current_expiry:
-            print(f"📅 当前到期日期: {current_expiry}")
-        else:
-            print("⚠️ 未能提取当前到期日期")
+        try:
+            sb.sleep(2)
+            page_source = sb.get_page_source()
+            current_expiry = extract_expiry_date(page_source)
+            if current_expiry:
+                print(f"📅 当前到期日期: {current_expiry}")
+            else:
+                print("⚠️ 未能提取当前到期日期")
+        except:
+            current_expiry = None
+            print("⚠️ 获取页面源码失败")
 
         # ---------- 查找外部续期按钮 ----------
         outer_renew_selector = None
@@ -388,26 +416,67 @@ def process_account(account, idx):
                 break
             print(f"🔄 续期尝试 {attempt}/2")
             try:
+                # 先检查浏览器是否存活
+                try:
+                    sb.get_current_url()
+                except:
+                    print("❌ 浏览器会话已失效，跳过该账号")
+                    send_telegram_message(
+                        format_notification("❌ 续期失败", email, login_method, error="浏览器崩溃")
+                    )
+                    return
+
                 # 点击外部续期按钮
                 print("🔄 点击外部续期按钮，等待验证窗口...")
                 sb.click(outer_renew_selector)
                 sb.sleep(5)
 
-                # ---------- Turnstile 处理（修正） ----------
+                # ---------- Turnstile 处理（加固） ----------
                 print("🔒 处理 Turnstile 验证...")
-                # 直接使用 uc_gui_click_captcha（有头模式下正常工作）
+                # 先等待 Turnstile 元素出现（iframe）
+                turnstile_loaded = False
+                for _ in range(10):
+                    try:
+                        if sb.is_element_visible('iframe[src*="turnstile"]', timeout=1):
+                            turnstile_loaded = True
+                            break
+                    except:
+                        pass
+                    time.sleep(1)
+                if not turnstile_loaded:
+                    print("⚠️ Turnstile 未加载，尝试直接点击验证区域")
+                    try:
+                        # 尝试点击可能存在的验证框
+                        sb.execute_script("""
+                            var iframe = document.querySelector('iframe[src*="turnstile"]');
+                            if (iframe) {
+                                var rect = iframe.getBoundingClientRect();
+                                var x = rect.left + rect.width/2;
+                                var y = rect.top + rect.height/2;
+                                var ev = new MouseEvent('click', {clientX: x, clientY: y});
+                                iframe.dispatchEvent(ev);
+                            }
+                        """)
+                        time.sleep(3)
+                    except:
+                        pass
+
+                # 调用 uc_gui_click_captcha（有头模式稳定）
                 try:
                     sb.uc_gui_click_captcha()
                     print("✅ Turnstile 点击已触发 (uc_gui_click_captcha)")
                 except Exception as e:
                     print(f"⚠️ Turnstile 点击异常: {e}")
-                    # 如果失败，尝试使用 js 模拟点击（作为后备）
+                    # 后备：尝试用 js 点击
                     try:
                         sb.execute_script("""
                             var iframe = document.querySelector('iframe[src*="turnstile"]');
                             if (iframe) {
-                                var clickEvent = new MouseEvent('click', {bubbles: true});
-                                iframe.contentDocument.querySelector('.challenge-container input')?.click();
+                                var rect = iframe.getBoundingClientRect();
+                                var x = rect.left + rect.width/2;
+                                var y = rect.top + rect.height/2;
+                                var ev = new MouseEvent('click', {clientX: x, clientY: y});
+                                iframe.dispatchEvent(ev);
                             }
                         """)
                         print("✅ Turnstile 后备点击已执行")
@@ -417,7 +486,7 @@ def process_account(account, idx):
                 # 等待模态框内续期按钮出现
                 renew_button_selector = 'button:contains("Renew for 4 days")'
                 button_found = False
-                for wait_sec in range(45):
+                for wait_sec in range(50):
                     try:
                         if sb.is_element_visible(renew_button_selector, timeout=1):
                             button_found = True
@@ -425,8 +494,8 @@ def process_account(account, idx):
                             break
                     except:
                         pass
-                    # 每 8 秒重试点击 Turnstile
-                    if wait_sec % 8 == 0 and wait_sec > 0:
+                    # 每 10 秒重试点击 Turnstile
+                    if wait_sec % 10 == 0 and wait_sec > 0:
                         try:
                             sb.uc_gui_click_captcha()
                         except:
@@ -435,10 +504,14 @@ def process_account(account, idx):
 
                 if not button_found:
                     print("❌ 续期按钮未出现，Turnstile 验证失败")
-                    sb.driver.execute_script("""
-                        var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
-                        if (modal) modal.style.display = 'none';
-                    """)
+                    # 尝试关闭模态框
+                    try:
+                        sb.driver.execute_script("""
+                            var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
+                            if (modal) modal.style.display = 'none';
+                        """)
+                    except:
+                        pass
                     sb.sleep(2)
                     continue
 
@@ -478,6 +551,7 @@ def process_account(account, idx):
                     break
                 else:
                     print("⚠️ 续期结果未知，到期日期未变化")
+                    # 再次刷新
                     sb.sleep(5)
                     sb.open("https://bot-hosting.net/a/billings")
                     sb.wait_for_ready_state_complete()
@@ -504,6 +578,13 @@ def process_account(account, idx):
                         continue
             except Exception as e:
                 print(f"⚠️ 续期流程异常: {e}")
+                # 检测是否为浏览器崩溃（连接被拒）
+                if "Connection refused" in str(e) or "ERR_CONNECTION_REFUSED" in str(e):
+                    print("❌ 浏览器会话崩溃，跳过该账号")
+                    send_telegram_message(
+                        format_notification("❌ 续期失败", email, login_method, error="浏览器崩溃")
+                    )
+                    return
                 try:
                     sb.open("https://bot-hosting.net/a/billings")
                     sb.wait_for_ready_state_complete()
