@@ -235,12 +235,11 @@ def process_account(account, idx):
         print(f"⚠️ 账号 {email} 缺少 Token，跳过")
         return
 
+    # ---------- 构造 SB 参数（仅支持的有效参数） ----------
     sb_kwargs = {
         "uc": True,
         "headless": HEADLESS,
-        "page_load_strategy": "eager",        # 减少等待时间
-        "timeout": 30,                        # 全局超时
-        "implicitly_wait": 5,
+        "page_load_strategy": "eager",   # 加快页面加载
     }
     if IS_PROXY:
         print(f"🔗 挂载代理: {PROXY_SERVER[:50]}...")
@@ -250,6 +249,13 @@ def process_account(account, idx):
 
     login_method = "SESSION_TOKEN"
     with SB(**sb_kwargs) as sb:
+        # 设置超时（SB 上下文内支持的方法）
+        try:
+            sb.set_page_load_timeout(30)
+            sb.set_script_timeout(30)
+        except:
+            pass
+
         # 获取出口 IP（容错）
         ip = get_current_ip(PROXY_SERVER if IS_PROXY else "")
         print(f"📍 当前出口IP: {ip}")
@@ -416,7 +422,7 @@ def process_account(account, idx):
                 break
             print(f"🔄 续期尝试 {attempt}/2")
             try:
-                # 先检查浏览器是否存活
+                # 检查浏览器是否存活
                 try:
                     sb.get_current_url()
                 except:
@@ -433,7 +439,7 @@ def process_account(account, idx):
 
                 # ---------- Turnstile 处理（加固） ----------
                 print("🔒 处理 Turnstile 验证...")
-                # 先等待 Turnstile 元素出现（iframe）
+                # 等待 Turnstile iframe 出现
                 turnstile_loaded = False
                 for _ in range(10):
                     try:
@@ -444,9 +450,8 @@ def process_account(account, idx):
                         pass
                     time.sleep(1)
                 if not turnstile_loaded:
-                    print("⚠️ Turnstile 未加载，尝试直接点击验证区域")
+                    print("⚠️ Turnstile 未加载，尝试点击验证区域")
                     try:
-                        # 尝试点击可能存在的验证框
                         sb.execute_script("""
                             var iframe = document.querySelector('iframe[src*="turnstile"]');
                             if (iframe) {
@@ -461,13 +466,13 @@ def process_account(account, idx):
                     except:
                         pass
 
-                # 调用 uc_gui_click_captcha（有头模式稳定）
+                # 调用 uc_gui_click_captcha（有头模式）
                 try:
                     sb.uc_gui_click_captcha()
                     print("✅ Turnstile 点击已触发 (uc_gui_click_captcha)")
                 except Exception as e:
                     print(f"⚠️ Turnstile 点击异常: {e}")
-                    # 后备：尝试用 js 点击
+                    # 后备 JS 点击
                     try:
                         sb.execute_script("""
                             var iframe = document.querySelector('iframe[src*="turnstile"]');
@@ -504,7 +509,6 @@ def process_account(account, idx):
 
                 if not button_found:
                     print("❌ 续期按钮未出现，Turnstile 验证失败")
-                    # 尝试关闭模态框
                     try:
                         sb.driver.execute_script("""
                             var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
@@ -551,7 +555,6 @@ def process_account(account, idx):
                     break
                 else:
                     print("⚠️ 续期结果未知，到期日期未变化")
-                    # 再次刷新
                     sb.sleep(5)
                     sb.open("https://bot-hosting.net/a/billings")
                     sb.wait_for_ready_state_complete()
@@ -578,7 +581,6 @@ def process_account(account, idx):
                         continue
             except Exception as e:
                 print(f"⚠️ 续期流程异常: {e}")
-                # 检测是否为浏览器崩溃（连接被拒）
                 if "Connection refused" in str(e) or "ERR_CONNECTION_REFUSED" in str(e):
                     print("❌ 浏览器会话崩溃，跳过该账号")
                     send_telegram_message(
