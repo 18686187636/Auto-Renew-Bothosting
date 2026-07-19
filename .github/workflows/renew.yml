@@ -28,7 +28,6 @@ jobs:
           pip install --upgrade seleniumbase requests
           seleniumbase install chromedriver
 
-      # ---------- 代理配置（sing-box，支持 IPv6） ----------
       - name: 🔗 配置代理（sing-box）
         if: env.NODE_LINK != ''
         env:
@@ -65,7 +64,6 @@ jobs:
             echo "⚠️ 链接不是 vless:// 协议，跳过代理"; exit 0
           fi
 
-          # ---------- 使用更健壮的 Python 解析（支持 IPv6） ----------
           python3 << 'PYEOF'
           import json, sys, os, re
           from urllib.parse import urlparse, parse_qs
@@ -79,33 +77,27 @@ jobs:
               sys.exit(0)
 
           netloc = parsed.netloc
-          # 分离 uuid 和 host:port
           if '@' in netloc:
               uuid, host_port = netloc.split('@', 1)
           else:
               uuid, host_port = '', netloc
 
-          # 处理 host 和 port（支持 IPv6）
           host = ''
-          port = '443'  # 默认端口
-          # 先尝试匹配 [IPv6]:port 格式
+          port = '443'
           bracket_match = re.match(r'^\[([^\]]+)\](?::(\d+))?$', host_port)
           if bracket_match:
               host = bracket_match.group(1)
               if bracket_match.group(2):
                   port = bracket_match.group(2)
           else:
-              # 如果不是方括号格式，检查是否为纯 IPv6（包含多个冒号）
               if host_port.count(':') > 1:
-                  host = host_port  # 整个是 IPv6，无端口
+                  host = host_port
               else:
-                  # 普通 host:port 或 host
                   if ':' in host_port:
                       host, port = host_port.split(':', 1)
                   else:
                       host = host_port
 
-          # 如果 host 为空，报错退出
           if not host:
               print(f"❌ 无法解析主机地址: {host_port}")
               sys.exit(1)
@@ -150,7 +142,6 @@ jobs:
           print("✅ 配置已生成")
           PYEOF
 
-          # 检查配置文件是否生成成功
           if [ -f sing-box-config.json ]; then
               echo "🚀 启动 sing-box..."
               nohup sing-box -c sing-box-config.json run > sing-box.log 2>&1 &
@@ -166,7 +157,6 @@ jobs:
               echo "⚠️ 未生成配置文件，跳过代理"
           fi
 
-      # ---------- 运行续期脚本 ----------
       - name: 🚀 运行续期脚本
         env:
           ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
@@ -182,6 +172,13 @@ jobs:
         run: |
           xvfb-run --auto-servernum python3 renew.py
 
+      - name: 📸 上传截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: "*.png"
+
       - name: 🧽 清理进程和临时文件
         if: always()
         run: |
@@ -189,7 +186,7 @@ jobs:
           pkill -f chromedriver || true
           pkill -f chrome || true
           pkill -f Xvfb || true
-          rm -f sing-box sing-box.gz sing-box.tar.gz sing-box-config.json sing-box.log
+          rm -f sing-box sing-box.gz sing-box.tar.gz sing-box-config.json sing-box.log *.png
 
       - name: 🧹 清理旧的工作流运行记录
         if: always()
