@@ -423,6 +423,7 @@ def process_account(account, idx):
                     sb.get_current_url()
                 except:
                     print("❌ 浏览器会话已失效，跳过该账号")
+                    sb.save_screenshot(f"browser_crash_{email}_{int(time.time())}.png")
                     send_telegram_message(
                         format_notification("❌ 续期失败", email, login_method, error="浏览器崩溃")
                     )
@@ -432,11 +433,12 @@ def process_account(account, idx):
                 print("🔄 点击外部续期按钮，等待验证窗口...")
                 sb.click(outer_renew_selector)
                 sb.sleep(5)
+                sb.save_screenshot(f"after_click_renew_{email}_{int(time.time())}.png")
 
                 # ---------- 强化 Turnstile 处理 ----------
                 print("🔒 处理 Turnstile 验证...")
 
-                # 1. 等待模态框出现（例如 .modal 或 [role="dialog"]）
+                # 1. 等待模态框出现
                 modal_selector = '.modal, .overlay, [role="dialog"], .challenge-modal'
                 modal_found = False
                 for _ in range(15):
@@ -449,10 +451,13 @@ def process_account(account, idx):
                     time.sleep(1)
                 if not modal_found:
                     print("⚠️ 未检测到模态框，可能页面未正常弹出")
+                    sb.save_screenshot(f"no_modal_{email}_{int(time.time())}.png")
                     # 尝试点击页面其他区域重新触发
                     sb.execute_script("window.scrollTo(0, 0);")
                     sb.click(outer_renew_selector)
                     sb.sleep(3)
+                else:
+                    sb.save_screenshot(f"modal_found_{email}_{int(time.time())}.png")
 
                 # 2. 等待 Turnstile iframe 出现
                 iframe_selector = 'iframe[src*="turnstile"], iframe[src*="cloudflare"], iframe[src*="challenge"]'
@@ -468,10 +473,9 @@ def process_account(account, idx):
 
                 if iframe_found:
                     print("✅ Turnstile iframe 已加载")
-                    # 尝试进入 iframe 点击复选框（通用做法）
+                    sb.save_screenshot(f"iframe_found_{email}_{int(time.time())}.png")
                     try:
                         sb.switch_to_frame(iframe_selector)
-                        # 尝试点击复选框（常见类名）
                         checkbox_selectors = [
                             '.challenge-container input[type="checkbox"]',
                             '.cf-turnstile input[type="checkbox"]',
@@ -485,6 +489,7 @@ def process_account(account, idx):
                                     sb.click(cs)
                                     clicked = True
                                     print(f"✅ 点击 Turnstile 复选框 ({cs})")
+                                    sb.save_screenshot(f"checkbox_clicked_{email}_{int(time.time())}.png")
                                     break
                             except:
                                 pass
@@ -500,18 +505,20 @@ def process_account(account, idx):
                                     iframe.dispatchEvent(ev);
                                 }
                             """)
+                            sb.save_screenshot(f"iframe_center_click_{email}_{int(time.time())}.png")
                         sb.switch_to_default_content()
                     except Exception as e:
                         print(f"⚠️ 操作 iframe 失败: {e}")
                         sb.switch_to_default_content()
                 else:
                     print("⚠️ Turnstile iframe 未加载，尝试 uc_gui_click_captcha")
+                    sb.save_screenshot(f"no_iframe_{email}_{int(time.time())}.png")
                     try:
                         sb.uc_gui_click_captcha()
                         print("✅ Turnstile 点击已触发 (uc_gui_click_captcha)")
+                        sb.save_screenshot(f"uc_gui_click_{email}_{int(time.time())}.png")
                     except Exception as e:
                         print(f"⚠️ uc_gui_click_captcha 失败: {e}")
-                        # 后备：直接点击页面坐标
                         try:
                             sb.execute_script("""
                                 var iframe = document.querySelector('iframe[src*="turnstile"]');
@@ -524,6 +531,7 @@ def process_account(account, idx):
                                 }
                             """)
                             print("✅ 后备 JS 点击已执行")
+                            sb.save_screenshot(f"js_backup_click_{email}_{int(time.time())}.png")
                         except:
                             pass
 
@@ -535,6 +543,7 @@ def process_account(account, idx):
                         if sb.is_element_visible(renew_button_selector, timeout=1):
                             button_found = True
                             print("✅ 续期按钮已出现，验证通过")
+                            sb.save_screenshot(f"renew_button_found_{email}_{int(time.time())}.png")
                             break
                     except:
                         pass
@@ -556,6 +565,7 @@ def process_account(account, idx):
 
                 if not button_found:
                     print("❌ 续期按钮未出现，Turnstile 验证失败")
+                    sb.save_screenshot(f"renew_button_not_found_{email}_{int(time.time())}.png")
                     try:
                         sb.driver.execute_script("""
                             var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
@@ -569,6 +579,7 @@ def process_account(account, idx):
                 print("⏳ 点击续期按钮...")
                 sb.click(renew_button_selector, timeout=5)
                 print("✅ 已点击续期按钮")
+                sb.save_screenshot(f"clicked_renew_button_{email}_{int(time.time())}.png")
 
                 print("⏳ 等待续期完成...")
                 sb.sleep(20)
@@ -602,6 +613,7 @@ def process_account(account, idx):
                     break
                 else:
                     print("⚠️ 续期结果未知，到期日期未变化")
+                    sb.save_screenshot(f"renew_unknown_{email}_{int(time.time())}.png")
                     sb.sleep(5)
                     sb.open("https://bot-hosting.net/a/billings")
                     sb.wait_for_ready_state_complete()
@@ -617,6 +629,7 @@ def process_account(account, idx):
                         break
                     else:
                         print("❌ 续期失败，准备重试")
+                        sb.save_screenshot(f"renew_failed_retry_{email}_{int(time.time())}.png")
                         try:
                             sb.driver.execute_script("""
                                 var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
@@ -628,6 +641,7 @@ def process_account(account, idx):
                         continue
             except Exception as e:
                 print(f"⚠️ 续期流程异常: {e}")
+                sb.save_screenshot(f"exception_{email}_{int(time.time())}.png")
                 if "Connection refused" in str(e) or "ERR_CONNECTION_REFUSED" in str(e):
                     print("❌ 浏览器会话崩溃，跳过该账号")
                     send_telegram_message(
