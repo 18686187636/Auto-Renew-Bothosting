@@ -235,11 +235,10 @@ def process_account(account, idx):
         print(f"⚠️ 账号 {email} 缺少 Token，跳过")
         return
 
-    # ---------- 构造 SB 参数（仅支持的有效参数） ----------
     sb_kwargs = {
         "uc": True,
         "headless": HEADLESS,
-        "page_load_strategy": "eager",   # 加快页面加载
+        "page_load_strategy": "eager",
     }
     if IS_PROXY:
         print(f"🔗 挂载代理: {PROXY_SERVER[:50]}...")
@@ -249,14 +248,12 @@ def process_account(account, idx):
 
     login_method = "SESSION_TOKEN"
     with SB(**sb_kwargs) as sb:
-        # 设置超时（SB 上下文内支持的方法）
         try:
             sb.set_page_load_timeout(30)
             sb.set_script_timeout(30)
         except:
             pass
 
-        # 获取出口 IP（容错）
         ip = get_current_ip(PROXY_SERVER if IS_PROXY else "")
         print(f"📍 当前出口IP: {ip}")
 
@@ -408,7 +405,6 @@ def process_account(account, idx):
             else:
                 print("ℹ️ 未找到续期按钮或倒计时，状态未知")
                 send_telegram_message(format_notification("ℹ️ 无需续期", email, login_method, extra="状态未知，请手动检查"))
-            # 仍更新 token
             new_token, _ = get_cookie_info(sb, "session_token")
             if new_token and new_token != session_token and GH_TOKEN:
                 update_github_secret(secret_name, new_token)
@@ -437,56 +433,99 @@ def process_account(account, idx):
                 sb.click(outer_renew_selector)
                 sb.sleep(5)
 
-                # ---------- Turnstile 处理（加固） ----------
+                # ---------- 强化 Turnstile 处理 ----------
                 print("🔒 处理 Turnstile 验证...")
-                # 等待 Turnstile iframe 出现
-                turnstile_loaded = False
-                for _ in range(10):
+
+                # 1. 等待模态框出现（例如 .modal 或 [role="dialog"]）
+                modal_selector = '.modal, .overlay, [role="dialog"], .challenge-modal'
+                modal_found = False
+                for _ in range(15):
                     try:
-                        if sb.is_element_visible('iframe[src*="turnstile"]', timeout=1):
-                            turnstile_loaded = True
+                        if sb.is_element_visible(modal_selector, timeout=1):
+                            modal_found = True
                             break
                     except:
                         pass
                     time.sleep(1)
-                if not turnstile_loaded:
-                    print("⚠️ Turnstile 未加载，尝试点击验证区域")
-                    try:
-                        sb.execute_script("""
-                            var iframe = document.querySelector('iframe[src*="turnstile"]');
-                            if (iframe) {
-                                var rect = iframe.getBoundingClientRect();
-                                var x = rect.left + rect.width/2;
-                                var y = rect.top + rect.height/2;
-                                var ev = new MouseEvent('click', {clientX: x, clientY: y});
-                                iframe.dispatchEvent(ev);
-                            }
-                        """)
-                        time.sleep(3)
-                    except:
-                        pass
+                if not modal_found:
+                    print("⚠️ 未检测到模态框，可能页面未正常弹出")
+                    # 尝试点击页面其他区域重新触发
+                    sb.execute_script("window.scrollTo(0, 0);")
+                    sb.click(outer_renew_selector)
+                    sb.sleep(3)
 
-                # 调用 uc_gui_click_captcha（有头模式）
-                try:
-                    sb.uc_gui_click_captcha()
-                    print("✅ Turnstile 点击已触发 (uc_gui_click_captcha)")
-                except Exception as e:
-                    print(f"⚠️ Turnstile 点击异常: {e}")
-                    # 后备 JS 点击
+                # 2. 等待 Turnstile iframe 出现
+                iframe_selector = 'iframe[src*="turnstile"], iframe[src*="cloudflare"], iframe[src*="challenge"]'
+                iframe_found = False
+                for _ in range(15):
                     try:
-                        sb.execute_script("""
-                            var iframe = document.querySelector('iframe[src*="turnstile"]');
-                            if (iframe) {
-                                var rect = iframe.getBoundingClientRect();
-                                var x = rect.left + rect.width/2;
-                                var y = rect.top + rect.height/2;
-                                var ev = new MouseEvent('click', {clientX: x, clientY: y});
-                                iframe.dispatchEvent(ev);
-                            }
-                        """)
-                        print("✅ Turnstile 后备点击已执行")
+                        if sb.is_element_visible(iframe_selector, timeout=1):
+                            iframe_found = True
+                            break
                     except:
                         pass
+                    time.sleep(1)
+
+                if iframe_found:
+                    print("✅ Turnstile iframe 已加载")
+                    # 尝试进入 iframe 点击复选框（通用做法）
+                    try:
+                        sb.switch_to_frame(iframe_selector)
+                        # 尝试点击复选框（常见类名）
+                        checkbox_selectors = [
+                            '.challenge-container input[type="checkbox"]',
+                            '.cf-turnstile input[type="checkbox"]',
+                            '.cf-checkbox',
+                            'input[type="checkbox"]'
+                        ]
+                        clicked = False
+                        for cs in checkbox_selectors:
+                            try:
+                                if sb.is_element_visible(cs, timeout=1):
+                                    sb.click(cs)
+                                    clicked = True
+                                    print(f"✅ 点击 Turnstile 复选框 ({cs})")
+                                    break
+                            except:
+                                pass
+                        if not clicked:
+                            print("⚠️ 未找到复选框，尝试点击 iframe 中心区域")
+                            sb.execute_script("""
+                                var iframe = document.querySelector('iframe[src*="turnstile"]');
+                                if (iframe) {
+                                    var rect = iframe.getBoundingClientRect();
+                                    var x = rect.left + rect.width/2;
+                                    var y = rect.top + rect.height/2;
+                                    var ev = new MouseEvent('click', {clientX: x, clientY: y});
+                                    iframe.dispatchEvent(ev);
+                                }
+                            """)
+                        sb.switch_to_default_content()
+                    except Exception as e:
+                        print(f"⚠️ 操作 iframe 失败: {e}")
+                        sb.switch_to_default_content()
+                else:
+                    print("⚠️ Turnstile iframe 未加载，尝试 uc_gui_click_captcha")
+                    try:
+                        sb.uc_gui_click_captcha()
+                        print("✅ Turnstile 点击已触发 (uc_gui_click_captcha)")
+                    except Exception as e:
+                        print(f"⚠️ uc_gui_click_captcha 失败: {e}")
+                        # 后备：直接点击页面坐标
+                        try:
+                            sb.execute_script("""
+                                var iframe = document.querySelector('iframe[src*="turnstile"]');
+                                if (iframe) {
+                                    var rect = iframe.getBoundingClientRect();
+                                    var x = rect.left + rect.width/2;
+                                    var y = rect.top + rect.height/2;
+                                    var ev = new MouseEvent('click', {clientX: x, clientY: y});
+                                    iframe.dispatchEvent(ev);
+                                }
+                            """)
+                            print("✅ 后备 JS 点击已执行")
+                        except:
+                            pass
 
                 # 等待模态框内续期按钮出现
                 renew_button_selector = 'button:contains("Renew for 4 days")'
@@ -502,7 +541,15 @@ def process_account(account, idx):
                     # 每 10 秒重试点击 Turnstile
                     if wait_sec % 10 == 0 and wait_sec > 0:
                         try:
-                            sb.uc_gui_click_captcha()
+                            if iframe_found:
+                                sb.switch_to_frame(iframe_selector)
+                                try:
+                                    sb.click('input[type="checkbox"]')
+                                except:
+                                    pass
+                                sb.switch_to_default_content()
+                            else:
+                                sb.uc_gui_click_captcha()
                         except:
                             pass
                     time.sleep(1)
