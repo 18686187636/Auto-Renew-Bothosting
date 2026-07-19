@@ -243,7 +243,7 @@ def process_account(account, idx):
         login_ok = False
         if session_token:
             print("🚀 启动浏览器...")
-            # 加载页面，确保域正确
+            # 加载页面并确认域
             page_loaded = False
             for attempt in range(1, 4):
                 try:
@@ -270,7 +270,6 @@ def process_account(account, idx):
                 )
                 return
 
-            # 再次确认域
             current_url = sb.get_current_url()
             if "bot-hosting.net" not in current_url:
                 print(f"❌ 当前域不是 bot-hosting.net，当前 URL: {current_url}")
@@ -287,7 +286,6 @@ def process_account(account, idx):
                     sb.add_cookie({"name": name, "value": value})
                 except Exception as e:
                     print(f"⚠️ 添加 Cookie {name} 失败: {e}")
-                    # 尝试重新打开页面并重试
                     try:
                         sb.open("https://bot-hosting.net/")
                         sb.wait_for_ready_state_complete()
@@ -395,18 +393,31 @@ def process_account(account, idx):
                 sb.click(outer_renew_selector)
                 sb.sleep(5)
 
-                # ---------- Turnstile 处理 ----------
+                # ---------- Turnstile 处理（修正） ----------
                 print("🔒 处理 Turnstile 验证...")
+                # 直接使用 uc_gui_click_captcha（有头模式下正常工作）
                 try:
-                    sb.uc_click_captcha()
-                    print("✅ Turnstile 点击已触发")
+                    sb.uc_gui_click_captcha()
+                    print("✅ Turnstile 点击已触发 (uc_gui_click_captcha)")
                 except Exception as e:
                     print(f"⚠️ Turnstile 点击异常: {e}")
+                    # 如果失败，尝试使用 js 模拟点击（作为后备）
+                    try:
+                        sb.execute_script("""
+                            var iframe = document.querySelector('iframe[src*="turnstile"]');
+                            if (iframe) {
+                                var clickEvent = new MouseEvent('click', {bubbles: true});
+                                iframe.contentDocument.querySelector('.challenge-container input')?.click();
+                            }
+                        """)
+                        print("✅ Turnstile 后备点击已执行")
+                    except:
+                        pass
 
                 # 等待模态框内续期按钮出现
                 renew_button_selector = 'button:contains("Renew for 4 days")'
                 button_found = False
-                for wait_sec in range(40):
+                for wait_sec in range(45):
                     try:
                         if sb.is_element_visible(renew_button_selector, timeout=1):
                             button_found = True
@@ -414,9 +425,10 @@ def process_account(account, idx):
                             break
                     except:
                         pass
+                    # 每 8 秒重试点击 Turnstile
                     if wait_sec % 8 == 0 and wait_sec > 0:
                         try:
-                            sb.uc_click_captcha()
+                            sb.uc_gui_click_captcha()
                         except:
                             pass
                     time.sleep(1)
