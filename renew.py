@@ -62,6 +62,7 @@ def format_notification(status, email, login_method="SESSION_TOKEN", extra="", e
     if error:
         lines.append(f"⚠️ 错误信息: {error}")
     lines.append(f"⏱️ 登录时间: {now}")
+    lines.append(f"https://bot-hosting.net/")
     return "\n".join(lines)
 
 def get_current_ip(proxy_server=""):
