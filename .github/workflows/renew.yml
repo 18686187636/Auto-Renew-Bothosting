@@ -1,35 +1,36 @@
-name: Auto Renew Bot-hosting
+name: Renew The Rose Cloud
 
 on:
-  schedule:
-    - cron: '0 0 */2 * *'        #2天1次，根据自己到期时间自己设置
   workflow_dispatch:
+  # 可选： schedule 定期运行
+  # schedule:
+  #   - cron: '0 0 * * *'
 
 jobs:
-  Renew-bot:
+  renew:
     runs-on: ubuntu-latest
     permissions:
       actions: write
       contents: read
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: ⚙ 设置 Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.10'
 
       - name: 🛠️ 安装系统依赖和 Python 依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb x11-utils xdotool scrot fonts-noto-cjk jq wget net-tools
+          sudo apt-get install -y xvfb x11-utils wget net-tools jq
           pip install --upgrade pip
           pip install --upgrade seleniumbase requests
           seleniumbase install chromedriver
 
       - name: 🔗 配置代理（sing-box）
-        if: env.NODE_LINK != ''
+        if: secrets.NODE_LINK != ''
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
@@ -159,25 +160,29 @@ jobs:
 
       - name: 🚀 运行续期脚本
         env:
-          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
           EMAIL: ${{ secrets.EMAIL }}
-          SESSION_TOKEN: ${{ secrets.SESSION_TOKEN }}
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          PASSWORD: ${{ secrets.PASSWORD }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          IS_PROXY: true
-          PROXY_SERVER: socks5://127.0.0.1:1080
-          HEADLESS: false
+          PROXY_SERVER: ${{ secrets.NODE_LINK != '' && 'socks5://127.0.0.1:1080' || '' }}
         run: |
-          xvfb-run --auto-servernum python3 renew.py
+          # 如果代理已启动，则使用 SOCKS5 代理；否则 PROXY_SERVER 为空
+          if [ -n "$PROXY_SERVER" ]; then
+            echo "🔗 已启用代理: $PROXY_SERVER"
+          else
+            echo "🍭 未启用代理，直连访问"
+          fi
+          xvfb-run --auto-servernum python script.py
 
       - name: 📸 上传截图
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: screenshots
-          path: "*.png"
+          name: debug-screenshots
+          path: |
+            *.png
+            *.log
+          if-no-files-found: ignore
 
       - name: 🧽 清理进程和临时文件
         if: always()
@@ -187,17 +192,3 @@ jobs:
           pkill -f chrome || true
           pkill -f Xvfb || true
           rm -f sing-box sing-box.gz sing-box.tar.gz sing-box-config.json sing-box.log *.png
-
-      - name: 🧹 清理旧的工作流运行记录
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          runs=$(gh run list --workflow="${{ github.workflow }}" --limit=100 --json databaseId --jq '.[].databaseId')
-          count=0
-          for run_id in $runs; do
-            count=$((count + 1))
-            if [ $count -gt 1 ]; then
-              gh run delete $run_id || true
-            fi
-          done
