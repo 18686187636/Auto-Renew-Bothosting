@@ -143,22 +143,6 @@ def update_github_secret(secret_name, new_value):
         print(f"❌ 异常: {e}")
         return False
 
-# ---------- Turnstile 等待 ----------
-def wait_for_turnstile_pass(sb, timeout=30):
-    start = time.time()
-    cf_indicators = ["verify you are human", "确认您是真人", "troubleshoot", "just a moment"]
-    while time.time() - start < timeout:
-        try:
-            page_lower = sb.get_page_source().lower()
-        except:
-            page_lower = ""
-        if not any(x in page_lower for x in cf_indicators):
-            print("✅ Turnstile 验证已通过")
-            return True
-        sb.sleep(1)
-    print("❌ Turnstile 验证超时未通过")
-    return False
-
 # ---------- Discord OAuth （增强版） ----------
 DISCORD_CLIENT_ID = "884382422530158623"
 OAUTH_REDIRECT_URI = "https://bot-hosting.net/login"
@@ -175,11 +159,9 @@ def capture_discord_state(sb):
             time.sleep(3)
             url = sb.get_current_url()
             print(f"  🌐 当前 URL: {url}")
-
             if "discord.com" not in url:
                 print(f"  ⚠️ 未跳转到 Discord，当前 URL 不包含 discord.com，可能被重定向到: {url}")
                 continue
-
             m = STATE_RE.search(url)
             if m:
                 state = urllib.parse.unquote(m.group(1))
@@ -232,7 +214,6 @@ def discord_authorize(state, discord_token):
         resp = requests.post(authorize_url, headers=headers, data=body, proxies=proxies, timeout=20)
         print(f"  📊 响应状态码: {resp.status_code}")
         print(f"  📄 响应内容前 200 字符: {resp.text[:200]}")
-
         if resp.status_code != 200:
             print(f"  ❌ 授权请求失败，状态码 {resp.status_code}")
             try:
@@ -256,13 +237,8 @@ def discord_authorize(state, discord_token):
         return ""
 
 def do_discord_login(sb, discord_token):
-    """
-    执行 Discord OAuth 登录，修复 error=disconnect 问题。
-    策略：如果回调后出现 error=disconnect，不再刷新，而是直接尝试访问 /a/billings。
-    """
     print("\n🔑 通过 Discord Token 登录...")
-
-    # 清除所有 cookie 和本地存储，避免残留干扰
+    # 清除可能残留的 cookie 和本地存储
     try:
         sb.delete_all_cookies()
         sb.execute_script("localStorage.clear();")
@@ -270,7 +246,6 @@ def do_discord_login(sb, discord_token):
     except:
         pass
 
-    # 预访问首页
     print("🌐 预访问 bot-hosting 首页，建立会话上下文...")
     try:
         sb.open("https://bot-hosting.net/")
@@ -282,65 +257,41 @@ def do_discord_login(sb, discord_token):
     max_attempts = 2
     for attempt in range(1, max_attempts + 1):
         print(f"\n🔄 Discord OAuth 尝试 {attempt}/{max_attempts}")
-
         state = capture_discord_state(sb)
         if not state:
             print("❌ 获取 state 失败")
             continue
-
         location = discord_authorize(state, discord_token)
         if not location:
             print("❌ 授权请求失败")
             continue
-
         print("  ✅ 获取到授权回调地址，准备跳转...")
-        # 清除错误 cookie
-        try:
-            sb.delete_cookie("error")
-        except:
-            pass
-
-        # 跳转到回调链接
         try:
             sb.uc_open_with_reconnect(location, reconnect_time=4)
             time.sleep(3)
         except Exception as e:
             print(f"  ❌ 跳转异常: {e}")
             continue
-
-        # 检查当前 URL
+        # 检查是否直接到达受保护页面
         current_url = sb.get_current_url()
         print(f"  🌐 跳转后 URL: {current_url}")
-
-        # 如果出现 error=disconnect，直接尝试访问账单页，而不是刷新
-        if "error=disconnect" in current_url:
-            print("  ⚠️ 检测到 error=disconnect，尝试直接访问 /a/billings ...")
-            try:
-                sb.open("https://bot-hosting.net/a/billings")
-                sb.wait_for_ready_state_complete()
-                time.sleep(3)
-                url_after = sb.get_current_url()
-                if "/a/billings" in url_after and "/login" not in url_after:
-                    print("  ✅ 通过直接访问成功进入账单页")
-                    return True
-                else:
-                    print(f"  ❌ 直接访问后仍处于登录页: {url_after}")
-                    # 继续尝试下一次
-                    continue
-            except Exception as e:
-                print(f"  ❌ 直接访问异常: {e}")
+        if "bot-hosting.net" in current_url and "/login" not in current_url:
+            print("  ✅ Discord OAuth 登录成功，已到达 bot-hosting 受保护页面")
+            return True
+        # 否则等待重定向
+        print("  ⏳ 等待重定向到 bot-hosting 页面...")
+        for i in range(30):
+            url = sb.get_current_url()
+            if "bot-hosting.net" in url and "/login" not in url:
+                print("  ✅ Discord OAuth 登录成功，已到达 bot-hosting 受保护页面")
+                return True
+            if "error=disconnect" in url:
+                print("  ⚠️ 检测到 error=disconnect，尝试刷新页面...")
+                sb.refresh()
+                time.sleep(2)
                 continue
-        else:
-            # 正常等待重定向
-            print("  ⏳ 等待重定向到 bot-hosting 页面...")
-            for i in range(30):
-                url = sb.get_current_url()
-                if "bot-hosting.net" in url and "/login" not in url:
-                    print("  ✅ Discord OAuth 登录成功，已到达 bot-hosting 受保护页面")
-                    return True
-                time.sleep(0.5)
-            print("  ❌ 等待重定向超时")
-
+            time.sleep(0.5)
+        print("  ❌ 本次尝试超时，准备重试")
     print("❌ 所有 Discord OAuth 尝试均失败")
     return False
 
@@ -601,35 +552,39 @@ def process_account(account, idx):
                     except Exception as e:
                         print(f"⚠️ uc_gui_click_captcha 失败: {e}")
 
-                # 等待 Turnstile 通过
-                if not wait_for_turnstile_pass(sb, timeout=30):
-                    print("❌ Turnstile 验证未通过，跳过本次尝试")
-                    continue
-
-                time.sleep(5)
-
-                # ---------- 点击模态框续期按钮 ----------
-                print("⏳ 点击续期按钮...")
-                renew_clicked = False
-                renew_selectors = [
-                    'button:contains("Renew for 4 days")',
-                    'button:contains("Renew free plan")',
-                    'button:contains("Renew")'
+                # 等待 Turnstile 验证完成（通过检测模态框关闭或续期按钮出现）
+                print("⏳ 等待 Turnstile 验证完成...")
+                time.sleep(5)  # 基础等待
+                # 尝试等待续期按钮出现（先等待模态框稳定）
+                try:
+                    sb.wait_for_element_visible('.modal, [role="dialog"], .overlay', timeout=10)
+                except:
+                    print("⚠️ 模态框未出现，但继续尝试查找按钮")
+                # 若模态框存在，则等待其内部按钮
+                print("⏳ 查找模态框内的续期按钮...")
+                renew_btn_selectors = [
+                    '//button[contains(text(),"Renew for 4 days")]',
+                    '//button[contains(text(),"Renew free plan")]',
+                    '//button[contains(text(),"Renew")]',
+                    'button[data-action="renew"]',
+                    '.modal button:contains("Renew")',
                 ]
-                for sel in renew_selectors:
+                clicked = False
+                for selector in renew_btn_selectors:
                     try:
-                        if sb.is_element_visible(sel, timeout=3):
-                            sb.click(sel)
-                            renew_clicked = True
-                            print(f"✅ 已点击续期按钮（{sel}）")
-                            sb.save_screenshot(f"clicked_renew_button_{email}_{int(time.time())}.png")
-                            break
+                        # 使用 wait_for_element_visible 替代 is_element_visible(timeout=)
+                        sb.wait_for_element_visible(selector, timeout=5)
+                        sb.click(selector)
+                        clicked = True
+                        print(f"✅ 已点击续期按钮: {selector}")
+                        sb.save_screenshot(f"clicked_renew_button_{email}_{int(time.time())}.png")
+                        break
                     except Exception as e:
-                        print(f"⚠️ 尝试选择器 {sel} 失败: {e}")
-
-                if not renew_clicked:
+                        print(f"⚠️ 尝试选择器 {selector} 失败: {e}")
+                if not clicked:
                     print("❌ 未找到续期按钮，可能弹窗未正确加载")
-                    sb.save_screenshot(f"no_renew_button_{email}_{int(time.time())}.png")
+                    sb.save_screenshot(f"renew_button_not_found_{email}_{int(time.time())}.png")
+                    # 如果续期按钮未找到，重试
                     continue
 
                 print("⏳ 等待续期完成...")
@@ -663,17 +618,33 @@ def process_account(account, idx):
                     renew_success = True
                     break
                 else:
-                    print("⚠️ 续期结果未知，到期日期未变化，准备重试")
+                    print("⚠️ 续期结果未知，到期日期未变化")
                     sb.save_screenshot(f"renew_unknown_{email}_{int(time.time())}.png")
-                    try:
-                        sb.driver.execute_script("""
-                            var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
-                            if (modal) modal.style.display = 'none';
-                        """)
-                    except:
-                        pass
-                    sb.sleep(2)
-                    continue
+                    sb.sleep(5)
+                    sb.open("https://bot-hosting.net/a/billings")
+                    sb.wait_for_ready_state_complete()
+                    sb.sleep(3)
+                    new_page_text = sb.get_page_source()
+                    new_expiry = extract_expiry_date(new_page_text)
+                    if new_expiry and new_expiry != current_expiry:
+                        print(f"✅ 续期成功（延迟），到期日期已更新为: {new_expiry}")
+                        send_telegram_message(
+                            format_notification("✅ 续期成功", email, login_method, extra="到期日期已更新", expiry_date=new_expiry)
+                        )
+                        renew_success = True
+                        break
+                    else:
+                        print("❌ 续期失败，准备重试")
+                        sb.save_screenshot(f"renew_failed_retry_{email}_{int(time.time())}.png")
+                        try:
+                            sb.driver.execute_script("""
+                                var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
+                                if (modal) modal.style.display = 'none';
+                            """)
+                        except:
+                            pass
+                        sb.sleep(2)
+                        continue
             except Exception as e:
                 print(f"⚠️ 续期流程异常: {e}")
                 sb.save_screenshot(f"exception_{email}_{int(time.time())}.png")
