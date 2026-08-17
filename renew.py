@@ -143,6 +143,23 @@ def update_github_secret(secret_name, new_value):
         print(f"❌ 异常: {e}")
         return False
 
+# ---------- 新增：等待 Turnstile 验证通过（从单账号脚本移植） ----------
+def wait_for_turnstile_pass(sb, timeout=30):
+    """轮询检测页面是否仍包含验证关键词，直到通过或超时"""
+    start = time.time()
+    cf_indicators = ["verify you are human", "确认您是真人", "troubleshoot", "just a moment"]
+    while time.time() - start < timeout:
+        try:
+            page_lower = sb.get_page_source().lower()
+        except:
+            page_lower = ""
+        if not any(x in page_lower for x in cf_indicators):
+            print("✅ Turnstile 验证已通过")
+            return True
+        sb.sleep(1)
+    print("❌ Turnstile 验证超时未通过")
+    return False
+
 # ---------- Discord OAuth （增强版） ----------
 DISCORD_CLIENT_ID = "884382422530158623"
 OAUTH_REDIRECT_URI = "https://bot-hosting.net/login"
@@ -530,8 +547,9 @@ def process_account(account, idx):
                 sb.sleep(5)
                 sb.save_screenshot(f"after_click_renew_{email}_{int(time.time())}.png")
 
-                # ---------- Turnstile 处理 ----------
+                # ---------- Turnstile 处理（修复部分） ----------
                 print("🔒 处理 Turnstile 验证...")
+                # 等待模态框出现
                 modal_selector = '.modal, .overlay, [role="dialog"], .challenge-modal, .popup, .dialog'
                 for _ in range(15):
                     try:
@@ -541,6 +559,7 @@ def process_account(account, idx):
                         pass
                     time.sleep(1)
 
+                # 查找 Turnstile iframe
                 iframe_selector = 'iframe[src*="turnstile"], iframe[src*="cloudflare"], iframe[src*="challenge"]'
                 iframe_found = False
                 for _ in range(15):
@@ -572,23 +591,46 @@ def process_account(account, idx):
                     except Exception as e:
                         print(f"⚠️ uc_gui_click_captcha 失败: {e}")
 
-                # ---------- 强制等待 60 秒后点击模态框续期按钮 ----------
-                print("⏳ 强制等待 60 秒，确保续期按钮加载完成...")
-                time.sleep(60)
-                renew_button_xpath = '/html/body/div/div[1]/div[3]/main/div/div[2]/div[2]/div[2]/button'
+                # ---------- 关键修复：等待 Turnstile 验证通过 ----------
+                if not wait_for_turnstile_pass(sb, timeout=30):
+                    print("❌ Turnstile 验证未通过，尝试刷新并重试")
+                    sb.save_screenshot(f"turnstile_timeout_{email}_{int(time.time())}.png")
+                    # 尝试刷新页面重新开始（但这里仅记录失败，继续重试循环）
+                    # 如果验证超时，我们跳过本次续期尝试，继续下一轮
+                    continue  # 进入下一次尝试
+
+                # 验证通过后，等待弹窗中的续期按钮可用（给页面 5 秒缓冲）
+                time.sleep(5)
+
+                # ---------- 点击模态框中的续期按钮（使用文本匹配，更稳健） ----------
                 print("⏳ 点击续期按钮...")
-                try:
-                    sb.click(renew_button_xpath, timeout=5)
-                    print("✅ 已点击续期按钮")
-                    sb.save_screenshot(f"clicked_renew_button_{email}_{int(time.time())}.png")
-                except Exception as e:
-                    print(f"❌ 点击续期按钮失败: {e}")
-                    sb.save_screenshot(f"click_renew_failed_{email}_{int(time.time())}.png")
+                renew_clicked = False
+                renew_selectors = [
+                    'button:contains("Renew for 4 days")',
+                    'button:contains("Renew free plan")',
+                    'button:contains("Renew")'
+                ]
+                for sel in renew_selectors:
+                    try:
+                        if sb.is_element_visible(sel, timeout=3):
+                            sb.click(sel)
+                            renew_clicked = True
+                            print(f"✅ 已点击续期按钮（{sel}）")
+                            sb.save_screenshot(f"clicked_renew_button_{email}_{int(time.time())}.png")
+                            break
+                    except Exception as e:
+                        print(f"⚠️ 尝试选择器 {sel} 失败: {e}")
+
+                if not renew_clicked:
+                    print("❌ 未找到续期按钮，可能弹窗未正确加载")
+                    sb.save_screenshot(f"no_renew_button_{email}_{int(time.time())}.png")
+                    # 不直接退出，留给下一次重试
                     continue
 
                 print("⏳ 等待续期完成...")
                 sb.sleep(20)
 
+                # 刷新账单页检查结果
                 sb.open("https://bot-hosting.net/a/billings")
                 sb.wait_for_ready_state_complete()
                 sb.sleep(8)
@@ -617,33 +659,18 @@ def process_account(account, idx):
                     renew_success = True
                     break
                 else:
-                    print("⚠️ 续期结果未知，到期日期未变化")
+                    print("⚠️ 续期结果未知，到期日期未变化，准备重试")
                     sb.save_screenshot(f"renew_unknown_{email}_{int(time.time())}.png")
-                    sb.sleep(5)
-                    sb.open("https://bot-hosting.net/a/billings")
-                    sb.wait_for_ready_state_complete()
-                    sb.sleep(3)
-                    new_page_text = sb.get_page_source()
-                    new_expiry = extract_expiry_date(new_page_text)
-                    if new_expiry and new_expiry != current_expiry:
-                        print(f"✅ 续期成功（延迟），到期日期已更新为: {new_expiry}")
-                        send_telegram_message(
-                            format_notification("✅ 续期成功", email, login_method, extra="到期日期已更新", expiry_date=new_expiry)
-                        )
-                        renew_success = True
-                        break
-                    else:
-                        print("❌ 续期失败，准备重试")
-                        sb.save_screenshot(f"renew_failed_retry_{email}_{int(time.time())}.png")
-                        try:
-                            sb.driver.execute_script("""
-                                var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
-                                if (modal) modal.style.display = 'none';
-                            """)
-                        except:
-                            pass
-                        sb.sleep(2)
-                        continue
+                    # 尝试关闭弹窗（如果存在）以便重试
+                    try:
+                        sb.driver.execute_script("""
+                            var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
+                            if (modal) modal.style.display = 'none';
+                        """)
+                    except:
+                        pass
+                    sb.sleep(2)
+                    continue
             except Exception as e:
                 print(f"⚠️ 续期流程异常: {e}")
                 sb.save_screenshot(f"exception_{email}_{int(time.time())}.png")
