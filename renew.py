@@ -6,6 +6,9 @@ import urllib.request, urllib.parse, urllib.error
 from datetime import datetime
 from seleniumbase import SB
 
+# ---------- 全局统一 User-Agent ----------
+DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
 # ---------- 环境变量 ----------
 EMAIL         = os.environ.get("EMAIL") or ""           
 SESSION_TOKEN = os.environ.get("SESSION_TOKEN") or ""   
@@ -140,7 +143,7 @@ def update_github_secret(secret_name, new_value):
         print(f"❌ 异常: {e}")
         return False
 
-# ---------- Discord OAuth （改进版，含详细调试日志） ----------
+# ---------- Discord OAuth （增强版） ----------
 DISCORD_CLIENT_ID = "884382422530158623"
 OAUTH_REDIRECT_URI = "https://bot-hosting.net/login"
 OAUTH_SCOPE = "identify email guilds"
@@ -164,7 +167,6 @@ def capture_discord_state(sb):
 
             if "discord.com" not in url:
                 print(f"  ⚠️ 未跳转到 Discord，当前 URL 不包含 discord.com，可能被重定向到: {url}")
-                # 可能已经被重定向回 bot-hosting，尝试重新加载
                 continue
 
             m = STATE_RE.search(url)
@@ -174,8 +176,6 @@ def capture_discord_state(sb):
                 return state
             else:
                 print("  ❌ 未在 URL 中找到 state 参数")
-                # 打印 URL 以便调试
-                print(f"  📄 URL 内容: {url}")
         except Exception as e:
             print(f"  ❌ 第 {attempt} 次捕获异常: {e}")
             time.sleep(2)
@@ -185,7 +185,7 @@ def capture_discord_state(sb):
 def discord_authorize(state, discord_token):
     """
     使用 Discord Token 进行 OAuth 授权，返回 location 重定向地址。
-    增加详细的请求/响应日志。
+    使用全局 UA。
     """
     print("  📤 向 Discord API 发送授权请求...")
     query = urllib.parse.urlencode({
@@ -209,7 +209,7 @@ def discord_authorize(state, discord_token):
         "content-type": "application/json",
         "origin": "https://discord.com",
         "referer": referer,
-        "user-agent": "Mozilla/5.0",
+        "user-agent": DEFAULT_UA,
         "x-discord-locale": "zh-CN",
     }
     body = json.dumps({
@@ -228,7 +228,6 @@ def discord_authorize(state, discord_token):
 
         if resp.status_code != 200:
             print(f"  ❌ 授权请求失败，状态码 {resp.status_code}")
-            # 尝试解析错误信息
             try:
                 err_data = resp.json()
                 print(f"  📋 错误详情: {err_data}")
@@ -252,48 +251,69 @@ def discord_authorize(state, discord_token):
 def do_discord_login(sb, discord_token):
     """
     执行完整的 Discord OAuth 登录流程。
-    返回 True 表示登录成功（已到达 bot-hosting 的非登录页面）。
+    增加预访问首页、重试和刷新处理。
     """
     print("\n🔑 通过 Discord Token 登录...")
-    state = capture_discord_state(sb)
-    if not state:
-        print("❌ 未能获取 state，Discord 登录中止")
-        return False
-    print(f"  ✅ state 获取成功: {state[:20]}...")
 
-    location = discord_authorize(state, discord_token)
-    if not location:
-        print("❌ 未能获取授权重定向地址，Discord 登录失败")
-        return False
-    print(f"  ✅ 获取到授权重定向地址，准备跳转...")
-
+    # 预访问 bot-hosting 首页，建立会话上下文
+    print("🌐 预访问 bot-hosting 首页，建立会话上下文...")
     try:
-        print("  🚀 跳转到授权回调 URL...")
-        sb.uc_open_with_reconnect(location, reconnect_time=4)
-        time.sleep(3)
+        sb.open("https://bot-hosting.net/")
+        sb.wait_for_ready_state_complete()
+        time.sleep(2)
+    except Exception as e:
+        print(f"⚠️ 预访问首页失败: {e}")
 
-        current_url = sb.get_current_url()
-        print(f"  🌐 跳转后当前 URL: {current_url}")
+    max_attempts = 2
+    for attempt in range(1, max_attempts + 1):
+        print(f"\n🔄 Discord OAuth 尝试 {attempt}/{max_attempts}")
 
-        if "/error/banned" in current_url:
-            print("  🚫 账号已被封禁")
-            return False
+        state = capture_discord_state(sb)
+        if not state:
+            print("❌ 获取 state 失败")
+            continue
 
-        # 等待最终到达 bot-hosting 的账单页或首页
+        location = discord_authorize(state, discord_token)
+        if not location:
+            print("❌ 授权请求失败")
+            continue
+
+        print("  ✅ 获取到授权回调地址，准备跳转...")
+        # 清除可能残留的错误 cookie
+        try:
+            sb.delete_cookie("error")
+        except:
+            pass
+
+        try:
+            sb.uc_open_with_reconnect(location, reconnect_time=4)
+            time.sleep(3)
+        except Exception as e:
+            print(f"  ❌ 跳转异常: {e}")
+            continue
+
+        # 等待最终到达 bot-hosting 的受保护页面
         print("  ⏳ 等待重定向到 bot-hosting 页面...")
         for i in range(30):
             url = sb.get_current_url()
             print(f"    ⏱️  第 {i+1} 秒，当前 URL: {url}")
-            if "bot-hosting.net" in url and "/login" not in url and not url.startswith("https://bot-hosting.net/login"):
+            if "bot-hosting.net" in url and "/login" not in url:
                 print("  ✅ Discord OAuth 登录成功，已到达 bot-hosting 受保护页面")
                 return True
+            # 如果出现 error=disconnect，尝试刷新页面
+            if "error=disconnect" in url:
+                print("  ⚠️ 检测到 error=disconnect，尝试刷新页面...")
+                sb.refresh()
+                time.sleep(2)
+                # 刷新后继续等待
+                continue
             time.sleep(0.5)
 
-        print("  ❌ 超时：未能在 30 秒内到达 bot-hosting 受保护页面")
-        return False
-    except Exception as e:
-        print(f"  ❌ Discord OAuth 登录异常: {e}")
-        return False
+        # 超时未成功，继续下一次尝试
+        print("  ❌ 本次尝试超时，准备重试")
+
+    print("❌ 所有 Discord OAuth 尝试均失败")
+    return False
 
 # ---------- 核心处理 ----------
 def process_account(account, idx):
@@ -310,6 +330,7 @@ def process_account(account, idx):
         "uc": True,
         "headless": HEADLESS,
         "page_load_strategy": "eager",
+        "agent": DEFAULT_UA,          # 统一 UA
     }
     if IS_PROXY:
         print(f"🔗 挂载代理: {PROXY_SERVER[:50]}...")
@@ -440,12 +461,11 @@ def process_account(account, idx):
             current_expiry = None
             print("⚠️ 获取页面源码失败")
 
-        # ---------- 查找外部续期按钮（加入用户提供的 XPath） ----------
+        # ---------- 查找外部续期按钮 ----------
         outer_renew_selector = None
         countdown_text = None
-        # 用户提供的 XPath（按钮的父级 <button>）
         xpath_selectors = [
-            '/html/body/div/div[1]/div[3]/main/div/div/section[1]/div[3]/div/button[1]',  # 新增
+            '/html/body/div/div[1]/div[3]/main/div/div/section[1]/div[3]/div/button[1]',
             '//button[contains(text(),"Renew free plan")]',
             '//a[contains(text(),"Renew free plan")]',
             '//button[contains(text(),"Renew")]',
@@ -510,9 +530,8 @@ def process_account(account, idx):
                 sb.sleep(5)
                 sb.save_screenshot(f"after_click_renew_{email}_{int(time.time())}.png")
 
-                # ---------- Turnstile 处理（简化） ----------
+                # ---------- Turnstile 处理 ----------
                 print("🔒 处理 Turnstile 验证...")
-                # 等待模态框
                 modal_selector = '.modal, .overlay, [role="dialog"], .challenge-modal, .popup, .dialog'
                 for _ in range(15):
                     try:
@@ -522,7 +541,6 @@ def process_account(account, idx):
                         pass
                     time.sleep(1)
 
-                # 检测 iframe
                 iframe_selector = 'iframe[src*="turnstile"], iframe[src*="cloudflare"], iframe[src*="challenge"]'
                 iframe_found = False
                 for _ in range(15):
@@ -554,7 +572,7 @@ def process_account(account, idx):
                     except Exception as e:
                         print(f"⚠️ uc_gui_click_captcha 失败: {e}")
 
-                # ---------- 强制等待 60 秒后直接点击模态框续期按钮 ----------
+                # ---------- 强制等待 60 秒后点击模态框续期按钮 ----------
                 print("⏳ 强制等待 60 秒，确保续期按钮加载完成...")
                 time.sleep(60)
                 renew_button_xpath = '/html/body/div/div[1]/div[3]/main/div/div[2]/div[2]/div[2]/button'
