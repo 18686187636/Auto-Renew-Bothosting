@@ -143,16 +143,19 @@ def update_github_secret(secret_name, new_value):
         print(f"❌ 异常: {e}")
         return False
 
-# ---------- 强化版 Turnstile 验证检测（来自简化版） ----------
+# ---------- 强化版 Turnstile 验证检测（来自单账号脚本） ----------
 def wait_for_turnstile_pass(sb, timeout=30):
     """通过检测页面中是否包含 Turnstile 相关关键词来判断验证是否通过"""
     start = time.time()
     cf_indicators = ["verify you are human", "确认您是真人", "troubleshoot", "just a moment"]
     while time.time() - start < timeout:
-        page_lower = sb.get_page_source().lower()
-        if not any(x in page_lower for x in cf_indicators):
-            print("✅ Turnstile 验证已通过")
-            return True
+        try:
+            page_lower = sb.get_page_source().lower()
+            if not any(x in page_lower for x in cf_indicators):
+                print("✅ Turnstile 验证已通过")
+                return True
+        except:
+            pass
         sb.sleep(1)
     print("❌ Turnstile 验证超时未通过")
     return False
@@ -522,21 +525,23 @@ def process_account(account, idx):
                 sb.sleep(5)
                 sb.save_screenshot(f"after_click_renew_{email}_{int(time.time())}.png")
 
-                # ---------- Turnstile 处理（强化版，使用 wait_for_turnstile_pass） ----------
+                # ---------- Turnstile 处理（使用单账号的验证方式） ----------
                 print("🔒 处理 Turnstile 验证...")
                 turnstile_passed = False
                 for turn_attempt in range(1, 4):
                     try:
-                        # 尝试点击验证
                         sb.uc_gui_click_captcha()
+                        print(f"✅ 第 {turn_attempt} 次 Turnstile 点击已触发")
                         time.sleep(12)
                     except Exception as e:
                         print(f"⚠️ 点击 Turnstile 出错: {e}")
+
                     if wait_for_turnstile_pass(sb, timeout=30):
                         turnstile_passed = True
                         break
                     else:
                         print(f"⏳ 第 {turn_attempt} 次未通过，重试点击...")
+
                 if not turnstile_passed:
                     print("❌ Turnstile 验证最终未通过，本次续期尝试失败")
                     sb.save_screenshot(f"turnstile_failed_{email}_{int(time.time())}.png")
@@ -611,7 +616,6 @@ def process_account(account, idx):
                 else:
                     print("⚠️ 续期结果未知，到期日期未变化")
                     sb.save_screenshot(f"renew_unknown_{email}_{int(time.time())}.png")
-                    # 尝试再刷新一次
                     sb.sleep(5)
                     sb.open("https://bot-hosting.net/a/billings")
                     sb.wait_for_ready_state_complete()
