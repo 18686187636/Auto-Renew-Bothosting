@@ -143,9 +143,8 @@ def update_github_secret(secret_name, new_value):
         print(f"❌ 异常: {e}")
         return False
 
-# ---------- 新增：等待 Turnstile 验证通过（从单账号脚本移植） ----------
+# ---------- Turnstile 等待 ----------
 def wait_for_turnstile_pass(sb, timeout=30):
-    """轮询检测页面是否仍包含验证关键词，直到通过或超时"""
     start = time.time()
     cf_indicators = ["verify you are human", "确认您是真人", "troubleshoot", "just a moment"]
     while time.time() - start < timeout:
@@ -168,16 +167,11 @@ DISCORD_API = "https://discord.com/api/v9/oauth2/authorize"
 STATE_RE = re.compile(r"[?&]state=([^&]+)")
 
 def capture_discord_state(sb):
-    """
-    访问 bot-hosting 的 Discord 登录入口，捕获 OAuth state 参数。
-    增加重试机制和详细日志。
-    """
     print("🔎 获取 Discord OAuth state...")
     for attempt in range(1, 4):
         try:
             print(f"  📡 尝试 {attempt}/3：打开 https://bot-hosting.net/login/discord")
             sb.uc_open_with_reconnect("https://bot-hosting.net/login/discord", reconnect_time=4)
-            # 等待页面跳转完成
             time.sleep(3)
             url = sb.get_current_url()
             print(f"  🌐 当前 URL: {url}")
@@ -200,10 +194,6 @@ def capture_discord_state(sb):
     return ""
 
 def discord_authorize(state, discord_token):
-    """
-    使用 Discord Token 进行 OAuth 授权，返回 location 重定向地址。
-    使用全局 UA。
-    """
     print("  📤 向 Discord API 发送授权请求...")
     query = urllib.parse.urlencode({
         "client_id": DISCORD_CLIENT_ID,
@@ -267,12 +257,20 @@ def discord_authorize(state, discord_token):
 
 def do_discord_login(sb, discord_token):
     """
-    执行完整的 Discord OAuth 登录流程。
-    增加预访问首页、重试和刷新处理。
+    执行 Discord OAuth 登录，修复 error=disconnect 问题。
+    策略：如果回调后出现 error=disconnect，不再刷新，而是直接尝试访问 /a/billings。
     """
     print("\n🔑 通过 Discord Token 登录...")
 
-    # 预访问 bot-hosting 首页，建立会话上下文
+    # 清除所有 cookie 和本地存储，避免残留干扰
+    try:
+        sb.delete_all_cookies()
+        sb.execute_script("localStorage.clear();")
+        print("🧹 已清除 cookie 和本地存储")
+    except:
+        pass
+
+    # 预访问首页
     print("🌐 预访问 bot-hosting 首页，建立会话上下文...")
     try:
         sb.open("https://bot-hosting.net/")
@@ -296,12 +294,13 @@ def do_discord_login(sb, discord_token):
             continue
 
         print("  ✅ 获取到授权回调地址，准备跳转...")
-        # 清除可能残留的错误 cookie
+        # 清除错误 cookie
         try:
             sb.delete_cookie("error")
         except:
             pass
 
+        # 跳转到回调链接
         try:
             sb.uc_open_with_reconnect(location, reconnect_time=4)
             time.sleep(3)
@@ -309,25 +308,38 @@ def do_discord_login(sb, discord_token):
             print(f"  ❌ 跳转异常: {e}")
             continue
 
-        # 等待最终到达 bot-hosting 的受保护页面
-        print("  ⏳ 等待重定向到 bot-hosting 页面...")
-        for i in range(30):
-            url = sb.get_current_url()
-            print(f"    ⏱️  第 {i+1} 秒，当前 URL: {url}")
-            if "bot-hosting.net" in url and "/login" not in url:
-                print("  ✅ Discord OAuth 登录成功，已到达 bot-hosting 受保护页面")
-                return True
-            # 如果出现 error=disconnect，尝试刷新页面
-            if "error=disconnect" in url:
-                print("  ⚠️ 检测到 error=disconnect，尝试刷新页面...")
-                sb.refresh()
-                time.sleep(2)
-                # 刷新后继续等待
-                continue
-            time.sleep(0.5)
+        # 检查当前 URL
+        current_url = sb.get_current_url()
+        print(f"  🌐 跳转后 URL: {current_url}")
 
-        # 超时未成功，继续下一次尝试
-        print("  ❌ 本次尝试超时，准备重试")
+        # 如果出现 error=disconnect，直接尝试访问账单页，而不是刷新
+        if "error=disconnect" in current_url:
+            print("  ⚠️ 检测到 error=disconnect，尝试直接访问 /a/billings ...")
+            try:
+                sb.open("https://bot-hosting.net/a/billings")
+                sb.wait_for_ready_state_complete()
+                time.sleep(3)
+                url_after = sb.get_current_url()
+                if "/a/billings" in url_after and "/login" not in url_after:
+                    print("  ✅ 通过直接访问成功进入账单页")
+                    return True
+                else:
+                    print(f"  ❌ 直接访问后仍处于登录页: {url_after}")
+                    # 继续尝试下一次
+                    continue
+            except Exception as e:
+                print(f"  ❌ 直接访问异常: {e}")
+                continue
+        else:
+            # 正常等待重定向
+            print("  ⏳ 等待重定向到 bot-hosting 页面...")
+            for i in range(30):
+                url = sb.get_current_url()
+                if "bot-hosting.net" in url and "/login" not in url:
+                    print("  ✅ Discord OAuth 登录成功，已到达 bot-hosting 受保护页面")
+                    return True
+                time.sleep(0.5)
+            print("  ❌ 等待重定向超时")
 
     print("❌ 所有 Discord OAuth 尝试均失败")
     return False
@@ -347,7 +359,7 @@ def process_account(account, idx):
         "uc": True,
         "headless": HEADLESS,
         "page_load_strategy": "eager",
-        "agent": DEFAULT_UA,          # 统一 UA
+        "agent": DEFAULT_UA,
     }
     if IS_PROXY:
         print(f"🔗 挂载代理: {PROXY_SERVER[:50]}...")
@@ -547,9 +559,8 @@ def process_account(account, idx):
                 sb.sleep(5)
                 sb.save_screenshot(f"after_click_renew_{email}_{int(time.time())}.png")
 
-                # ---------- Turnstile 处理（修复部分） ----------
+                # ---------- Turnstile 处理 ----------
                 print("🔒 处理 Turnstile 验证...")
-                # 等待模态框出现
                 modal_selector = '.modal, .overlay, [role="dialog"], .challenge-modal, .popup, .dialog'
                 for _ in range(15):
                     try:
@@ -559,7 +570,6 @@ def process_account(account, idx):
                         pass
                     time.sleep(1)
 
-                # 查找 Turnstile iframe
                 iframe_selector = 'iframe[src*="turnstile"], iframe[src*="cloudflare"], iframe[src*="challenge"]'
                 iframe_found = False
                 for _ in range(15):
@@ -591,18 +601,14 @@ def process_account(account, idx):
                     except Exception as e:
                         print(f"⚠️ uc_gui_click_captcha 失败: {e}")
 
-                # ---------- 关键修复：等待 Turnstile 验证通过 ----------
+                # 等待 Turnstile 通过
                 if not wait_for_turnstile_pass(sb, timeout=30):
-                    print("❌ Turnstile 验证未通过，尝试刷新并重试")
-                    sb.save_screenshot(f"turnstile_timeout_{email}_{int(time.time())}.png")
-                    # 尝试刷新页面重新开始（但这里仅记录失败，继续重试循环）
-                    # 如果验证超时，我们跳过本次续期尝试，继续下一轮
-                    continue  # 进入下一次尝试
+                    print("❌ Turnstile 验证未通过，跳过本次尝试")
+                    continue
 
-                # 验证通过后，等待弹窗中的续期按钮可用（给页面 5 秒缓冲）
                 time.sleep(5)
 
-                # ---------- 点击模态框中的续期按钮（使用文本匹配，更稳健） ----------
+                # ---------- 点击模态框续期按钮 ----------
                 print("⏳ 点击续期按钮...")
                 renew_clicked = False
                 renew_selectors = [
@@ -624,13 +630,11 @@ def process_account(account, idx):
                 if not renew_clicked:
                     print("❌ 未找到续期按钮，可能弹窗未正确加载")
                     sb.save_screenshot(f"no_renew_button_{email}_{int(time.time())}.png")
-                    # 不直接退出，留给下一次重试
                     continue
 
                 print("⏳ 等待续期完成...")
                 sb.sleep(20)
 
-                # 刷新账单页检查结果
                 sb.open("https://bot-hosting.net/a/billings")
                 sb.wait_for_ready_state_complete()
                 sb.sleep(8)
@@ -661,7 +665,6 @@ def process_account(account, idx):
                 else:
                     print("⚠️ 续期结果未知，到期日期未变化，准备重试")
                     sb.save_screenshot(f"renew_unknown_{email}_{int(time.time())}.png")
-                    # 尝试关闭弹窗（如果存在）以便重试
                     try:
                         sb.driver.execute_script("""
                             var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
