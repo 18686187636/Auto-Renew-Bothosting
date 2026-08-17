@@ -140,7 +140,7 @@ def update_github_secret(secret_name, new_value):
         print(f"❌ 异常: {e}")
         return False
 
-# ---------- Discord OAuth ----------
+# ---------- Discord OAuth （改进版，含详细调试日志） ----------
 DISCORD_CLIENT_ID = "884382422530158623"
 OAUTH_REDIRECT_URI = "https://bot-hosting.net/login"
 OAUTH_SCOPE = "identify email guilds"
@@ -148,21 +148,46 @@ DISCORD_API = "https://discord.com/api/v9/oauth2/authorize"
 STATE_RE = re.compile(r"[?&]state=([^&]+)")
 
 def capture_discord_state(sb):
+    """
+    访问 bot-hosting 的 Discord 登录入口，捕获 OAuth state 参数。
+    增加重试机制和详细日志。
+    """
     print("🔎 获取 Discord OAuth state...")
-    try:
-        sb.uc_open_with_reconnect("https://bot-hosting.net/login/discord", reconnect_time=4)
-        time.sleep(2)
-        url = sb.get_current_url()
-        if "discord.com" not in url:
-            return ""
-        m = STATE_RE.search(url)
-        if not m:
-            return ""
-        return urllib.parse.unquote(m.group(1))
-    except:
-        return ""
+    for attempt in range(1, 4):
+        try:
+            print(f"  📡 尝试 {attempt}/3：打开 https://bot-hosting.net/login/discord")
+            sb.uc_open_with_reconnect("https://bot-hosting.net/login/discord", reconnect_time=4)
+            # 等待页面跳转完成
+            time.sleep(3)
+            url = sb.get_current_url()
+            print(f"  🌐 当前 URL: {url}")
+
+            if "discord.com" not in url:
+                print(f"  ⚠️ 未跳转到 Discord，当前 URL 不包含 discord.com，可能被重定向到: {url}")
+                # 可能已经被重定向回 bot-hosting，尝试重新加载
+                continue
+
+            m = STATE_RE.search(url)
+            if m:
+                state = urllib.parse.unquote(m.group(1))
+                print(f"  ✅ 成功捕获 state: {state[:20]}...")
+                return state
+            else:
+                print("  ❌ 未在 URL 中找到 state 参数")
+                # 打印 URL 以便调试
+                print(f"  📄 URL 内容: {url}")
+        except Exception as e:
+            print(f"  ❌ 第 {attempt} 次捕获异常: {e}")
+            time.sleep(2)
+    print("❌ 无法获取 Discord OAuth state")
+    return ""
 
 def discord_authorize(state, discord_token):
+    """
+    使用 Discord Token 进行 OAuth 授权，返回 location 重定向地址。
+    增加详细的请求/响应日志。
+    """
+    print("  📤 向 Discord API 发送授权请求...")
     query = urllib.parse.urlencode({
         "client_id": DISCORD_CLIENT_ID,
         "response_type": "code",
@@ -194,36 +219,81 @@ def discord_authorize(state, discord_token):
         "location_context": {"guild_id": "10000", "channel_id": "10000", "channel_type": 10000},
     })
     proxies = {"http": PROXY_SERVER, "https": PROXY_SERVER} if IS_PROXY else None
+
     try:
+        print(f"  🚀 POST 到: {authorize_url}")
         resp = requests.post(authorize_url, headers=headers, data=body, proxies=proxies, timeout=20)
+        print(f"  📊 响应状态码: {resp.status_code}")
+        print(f"  📄 响应内容前 200 字符: {resp.text[:200]}")
+
         if resp.status_code != 200:
+            print(f"  ❌ 授权请求失败，状态码 {resp.status_code}")
+            # 尝试解析错误信息
+            try:
+                err_data = resp.json()
+                print(f"  📋 错误详情: {err_data}")
+            except:
+                pass
             return ""
-        return resp.json().get("location", "")
-    except:
+        result = resp.json()
+        location = result.get("location", "")
+        if location:
+            print(f"  ✅ 获取到重定向 location: {location[:80]}...")
+        else:
+            print("  ⚠️ 响应中未包含 location 字段")
+        return location
+    except requests.exceptions.Timeout:
+        print("  ❌ 请求超时")
+        return ""
+    except Exception as e:
+        print(f"  ❌ 授权异常: {e}")
         return ""
 
 def do_discord_login(sb, discord_token):
+    """
+    执行完整的 Discord OAuth 登录流程。
+    返回 True 表示登录成功（已到达 bot-hosting 的非登录页面）。
+    """
     print("\n🔑 通过 Discord Token 登录...")
     state = capture_discord_state(sb)
     if not state:
+        print("❌ 未能获取 state，Discord 登录中止")
         return False
+    print(f"  ✅ state 获取成功: {state[:20]}...")
+
     location = discord_authorize(state, discord_token)
     if not location:
+        print("❌ 未能获取授权重定向地址，Discord 登录失败")
         return False
+    print(f"  ✅ 获取到授权重定向地址，准备跳转...")
+
     try:
+        print("  🚀 跳转到授权回调 URL...")
         sb.uc_open_with_reconnect(location, reconnect_time=4)
         time.sleep(3)
-        if "/error/banned" in sb.get_current_url():
-            print("🚫 账号已被封禁")
+
+        current_url = sb.get_current_url()
+        print(f"  🌐 跳转后当前 URL: {current_url}")
+
+        if "/error/banned" in current_url:
+            print("  🚫 账号已被封禁")
             return False
-        for _ in range(30):
+
+        # 等待最终到达 bot-hosting 的账单页或首页
+        print("  ⏳ 等待重定向到 bot-hosting 页面...")
+        for i in range(30):
             url = sb.get_current_url()
+            print(f"    ⏱️  第 {i+1} 秒，当前 URL: {url}")
             if "bot-hosting.net" in url and "/login" not in url and not url.startswith("https://bot-hosting.net/login"):
+                print("  ✅ Discord OAuth 登录成功，已到达 bot-hosting 受保护页面")
                 return True
             time.sleep(0.5)
-    except:
+
+        print("  ❌ 超时：未能在 30 秒内到达 bot-hosting 受保护页面")
         return False
-    return False
+    except Exception as e:
+        print(f"  ❌ Discord OAuth 登录异常: {e}")
+        return False
 
 # ---------- 核心处理 ----------
 def process_account(account, idx):
@@ -348,8 +418,10 @@ def process_account(account, idx):
                         print("✅ Discord OAuth 登录成功")
                     else:
                         print("❌ Discord OAuth 后未到达账单页")
-                except:
-                    pass
+                except Exception as e:
+                    print(f"❌ Discord OAuth 后访问账单页异常: {e}")
+            else:
+                print("❌ Discord OAuth 登录流程失败")
 
         if not login_ok:
             send_telegram_message(format_notification("❌ 登录失败", email, login_method, error="登录失败"))
@@ -637,4 +709,4 @@ def main():
     print("\n✅ 所有账号处理完成。")
 
 if __name__ == "__main__":
-    main() 
+    main()
