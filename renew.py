@@ -143,6 +143,20 @@ def update_github_secret(secret_name, new_value):
         print(f"❌ 异常: {e}")
         return False
 
+# ---------- 强化版 Turnstile 验证检测（来自简化版） ----------
+def wait_for_turnstile_pass(sb, timeout=30):
+    """通过检测页面中是否包含 Turnstile 相关关键词来判断验证是否通过"""
+    start = time.time()
+    cf_indicators = ["verify you are human", "确认您是真人", "troubleshoot", "just a moment"]
+    while time.time() - start < timeout:
+        page_lower = sb.get_page_source().lower()
+        if not any(x in page_lower for x in cf_indicators):
+            print("✅ Turnstile 验证已通过")
+            return True
+        sb.sleep(1)
+    print("❌ Turnstile 验证超时未通过")
+    return False
+
 # ---------- Discord OAuth （增强版） ----------
 DISCORD_CLIENT_ID = "884382422530158623"
 OAUTH_REDIRECT_URI = "https://bot-hosting.net/login"
@@ -508,47 +522,27 @@ def process_account(account, idx):
                 sb.sleep(5)
                 sb.save_screenshot(f"after_click_renew_{email}_{int(time.time())}.png")
 
-                # ---------- Turnstile 处理（增强版） ----------
+                # ---------- Turnstile 处理（强化版，使用 wait_for_turnstile_pass） ----------
                 print("🔒 处理 Turnstile 验证...")
-                modal_selector = '.modal, .overlay, [role="dialog"], .challenge-modal, .popup, .dialog'
-                # 等待模态框出现
-                for _ in range(15):
+                turnstile_passed = False
+                for turn_attempt in range(1, 4):
                     try:
-                        if sb.is_element_visible(modal_selector, timeout=1):
-                            break
-                    except:
-                        pass
-                    time.sleep(1)
-
-                # 尝试使用 uc_gui_handle_cf 或 uc_gui_click_captcha
-                try:
-                    sb.uc_gui_handle_cf()
-                    print("✅ Turnstile 已处理 (uc_gui_handle_cf)")
-                except Exception as e:
-                    print(f"⚠️ uc_gui_handle_cf 失败: {e}，尝试 uc_gui_click_captcha")
-                    try:
+                        # 尝试点击验证
                         sb.uc_gui_click_captcha()
-                        print("✅ Turnstile 点击已触发 (uc_gui_click_captcha)")
-                    except Exception as e2:
-                        print(f"⚠️ uc_gui_click_captcha 也失败: {e2}")
+                        time.sleep(12)
+                    except Exception as e:
+                        print(f"⚠️ 点击 Turnstile 出错: {e}")
+                    if wait_for_turnstile_pass(sb, timeout=30):
+                        turnstile_passed = True
+                        break
+                    else:
+                        print(f"⏳ 第 {turn_attempt} 次未通过，重试点击...")
+                if not turnstile_passed:
+                    print("❌ Turnstile 验证最终未通过，本次续期尝试失败")
+                    sb.save_screenshot(f"turnstile_failed_{email}_{int(time.time())}.png")
+                    continue
 
-                # 等待验证完成（检测模态框消失或出现成功标志）
-                print("⏳ 等待 Turnstile 验证完成...")
-                for i in range(30):
-                    try:
-                        if not sb.is_element_visible(modal_selector, timeout=0.5):
-                            print("✅ 模态框已消失，验证可能完成")
-                            break
-                        if sb.is_element_visible('[class*="error"]', timeout=0.5):
-                            print("⚠️ 检测到验证错误，可能失败")
-                            break
-                    except:
-                        pass
-                    time.sleep(1)
-                else:
-                    print("⚠️ 验证超时，但继续尝试")
-
-                time.sleep(3)
+                print("✅ Turnstile 验证已通过")
 
                 # ---------- 点击模态框内续期按钮 ----------
                 print("⏳ 查找模态框内的续期按钮...")
@@ -562,7 +556,7 @@ def process_account(account, idx):
                 clicked = False
                 for selector in renew_btn_selectors:
                     try:
-                        sb.wait_for_element_visible(selector, timeout=8)
+                        sb.wait_for_element_visible(selector, timeout=10)
                         sb.click(selector)
                         clicked = True
                         print(f"✅ 已点击续期按钮: {selector}")
