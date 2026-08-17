@@ -1,3 +1,298 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os, re, sys, time, json, requests, subprocess
+import urllib.request, urllib.parse, urllib.error
+from datetime import datetime
+from seleniumbase import SB
+
+# ---------- 全局统一 User-Agent ----------
+DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# ---------- 环境变量 ----------
+EMAIL         = os.environ.get("EMAIL") or ""           
+SESSION_TOKEN = os.environ.get("SESSION_TOKEN") or ""   
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") or ""   
+GH_TOKEN      = os.environ.get("GH_TOKEN") or ""        
+TG_CHAT_ID    = os.environ.get("TG_CHAT_ID") or ""      
+TG_BOT_TOKEN  = os.environ.get("TG_BOT_TOKEN") or ""    
+ACCOUNTS_JSON = os.environ.get("ACCOUNTS_JSON") or os.environ.get("ACCOUNTS") or ""
+
+# ---------- 代理 ----------
+IS_PROXY      = os.environ.get("IS_PROXY", "false").lower() == "true"
+PROXY_SERVER  = os.environ.get("PROXY_SERVER", "").strip() or "http://127.0.0.1:1080"
+NODE_LINK     = os.environ.get("NODE_LINK", "").strip()
+if NODE_LINK:
+    IS_PROXY = True
+    PROXY_SERVER = NODE_LINK
+    print(f"🔗 使用 NODE_LINK 代理: {PROXY_SERVER[:50]}...")
+else:
+    if IS_PROXY:
+        print(f"🔗 使用 PROXY_SERVER 代理: {PROXY_SERVER}")
+    else:
+        print("🍭 未使用代理，直连访问")
+
+HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"
+
+# ---------- 工具函数 ----------
+def send_telegram_message(message: str):
+    if not TG_BOT_TOKEN or not TG_CHAT_ID:
+        return
+    try:
+        requests.post(f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
+                      json={"chat_id": TG_CHAT_ID, "text": message}, timeout=10)
+        print("✅ Telegram 通知已发送")
+    except Exception as e:
+        print(f"❌ Telegram 发送失败: {e}")
+
+def format_notification(status, email, login_method="SESSION_TOKEN", extra="", error="", expiry_date=""):
+    now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(time.time() + 28800))
+    if '@' in email:
+        name, domain = email.split('@', 1)
+        masked_email = f"{name[:2]}****{name[-2:]}@{domain}" if len(name)>4 else f"{name}@{domain}"
+    else:
+        masked_email = email[:2] + '****'
+    lines = [
+        "🇫🇮 Bot-hosting 续期通知", "", f"{status}",
+        f"👤 登录账户: {masked_email}",
+    ]
+    if login_method != "SESSION_TOKEN":
+        lines.append(f"🔐 登录方式: {login_method}")
+    if expiry_date:
+        lines.append(f"📅 到期时间: {expiry_date}")
+    if extra:
+        lines.append(extra)
+    if error:
+        lines.append(f"⚠️ 错误信息: {error}")
+    lines.append(f"⏱️ 登录时间: {now}")
+    lines.append(f"https://bot-hosting.net/")
+    return "\n".join(lines)
+
+def get_current_ip(proxy_server=""):
+    proxies = {"http": proxy_server, "https": proxy_server} if proxy_server else None
+    try:
+        response = requests.get("https://api.ip.sb/ip", proxies=proxies, timeout=15)
+        response.raise_for_status()
+        return response.text.strip()
+    except Exception as e:
+        print(f"⚠️ 获取出口 IP 失败: {e}")
+        return "未知"
+
+def format_countdown(countdown_str):
+    try:
+        h, m, _ = countdown_str.split(':')
+        h, m = int(h), int(m)
+        return f"{h}h{m}min" if h > 0 else f"{m}min"
+    except:
+        return countdown_str
+
+def extract_expiry_date(page_source):
+    patterns = [
+        r"[Ee]xpires\s*[:\-]?\s*(\d{4}/\d{2}/\d{2})",
+        r"[Ee]xpires\s*[:\-]?\s*(\d{2}/\d{2}/\d{4})",
+        r"(\d{4}/\d{2}/\d{2})\s*[\-–]\s*renew",
+        r"(\d{2}/\d{2}/\d{4})\s*[\-–]\s*renew",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, page_source)
+        if match:
+            date_str = match.group(1)
+            if len(date_str.split('/')[-1]) == 4:
+                parts = date_str.split('/')
+                if len(parts[0]) == 2:
+                    return f"{parts[2]}/{parts[0]}/{parts[1]}"
+            return date_str
+    return None
+
+def get_cookie_info(sb, name):
+    try:
+        for c in sb.get_cookies():
+            if c.get('name') == name:
+                return c.get('value'), datetime.fromtimestamp(c.get('expiry')) if c.get('expiry') else None
+    except:
+        pass
+    return None, None
+
+def should_update_cookie(new_value, old_value, expiry_dt, days_threshold=3):
+    if not new_value or new_value == old_value:
+        return False
+    if expiry_dt:
+        return (expiry_dt - datetime.now()).total_seconds() < days_threshold * 86400
+    return True
+
+def update_github_secret(secret_name, new_value):
+    if not new_value:
+        print("⚠️ 跳过更新：新值为空")
+        return False
+    masked = new_value[:4] + "..." + new_value[-4:] if len(new_value) > 8 else "***"
+    print(f"🔄 更新 Secret: {secret_name} (新值: {masked})")
+    try:
+        env = os.environ.copy()
+        if GH_TOKEN:
+            env["GH_TOKEN"] = GH_TOKEN
+        proc = subprocess.run(
+            ["gh", "secret", "set", secret_name, "--body", new_value],
+            capture_output=True, text=True, timeout=30, check=False, env=env
+        )
+        if proc.returncode == 0:
+            return True
+        else:
+            print(f"❌ 更新失败: {proc.stderr.strip()}")
+            return False
+    except Exception as e:
+        print(f"❌ 异常: {e}")
+        return False
+
+# ---------- Discord OAuth （增强版） ----------
+DISCORD_CLIENT_ID = "884382422530158623"
+OAUTH_REDIRECT_URI = "https://bot-hosting.net/login"
+OAUTH_SCOPE = "identify email guilds"
+DISCORD_API = "https://discord.com/api/v9/oauth2/authorize"
+STATE_RE = re.compile(r"[?&]state=([^&]+)")
+
+def capture_discord_state(sb):
+    print("🔎 获取 Discord OAuth state...")
+    for attempt in range(1, 4):
+        try:
+            print(f"  📡 尝试 {attempt}/3：打开 https://bot-hosting.net/login/discord")
+            sb.uc_open_with_reconnect("https://bot-hosting.net/login/discord", reconnect_time=4)
+            time.sleep(3)
+            url = sb.get_current_url()
+            print(f"  🌐 当前 URL: {url}")
+            if "discord.com" not in url:
+                print(f"  ⚠️ 未跳转到 Discord，当前 URL 不包含 discord.com，可能被重定向到: {url}")
+                continue
+            m = STATE_RE.search(url)
+            if m:
+                state = urllib.parse.unquote(m.group(1))
+                print(f"  ✅ 成功捕获 state: {state[:20]}...")
+                return state
+            else:
+                print("  ❌ 未在 URL 中找到 state 参数")
+        except Exception as e:
+            print(f"  ❌ 第 {attempt} 次捕获异常: {e}")
+            time.sleep(2)
+    print("❌ 无法获取 Discord OAuth state")
+    return ""
+
+def discord_authorize(state, discord_token):
+    print("  📤 向 Discord API 发送授权请求...")
+    query = urllib.parse.urlencode({
+        "client_id": DISCORD_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": OAUTH_REDIRECT_URI,
+        "scope": OAUTH_SCOPE,
+        "state": state,
+    })
+    authorize_url = f"{DISCORD_API}?{query}"
+    referer = "https://discord.com/oauth2/authorize?" + urllib.parse.urlencode({
+        "client_id": DISCORD_CLIENT_ID,
+        "redirect_uri": OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": OAUTH_SCOPE,
+        "state": state,
+    })
+    headers = {
+        "accept": "*/*",
+        "authorization": discord_token,
+        "content-type": "application/json",
+        "origin": "https://discord.com",
+        "referer": referer,
+        "user-agent": DEFAULT_UA,
+        "x-discord-locale": "zh-CN",
+    }
+    body = json.dumps({
+        "permissions": "0",
+        "authorize": True,
+        "integration_type": 0,
+        "location_context": {"guild_id": "10000", "channel_id": "10000", "channel_type": 10000},
+    })
+    proxies = {"http": PROXY_SERVER, "https": PROXY_SERVER} if IS_PROXY else None
+
+    try:
+        print(f"  🚀 POST 到: {authorize_url}")
+        resp = requests.post(authorize_url, headers=headers, data=body, proxies=proxies, timeout=20)
+        print(f"  📊 响应状态码: {resp.status_code}")
+        print(f"  📄 响应内容前 200 字符: {resp.text[:200]}")
+        if resp.status_code != 200:
+            print(f"  ❌ 授权请求失败，状态码 {resp.status_code}")
+            try:
+                err_data = resp.json()
+                print(f"  📋 错误详情: {err_data}")
+            except:
+                pass
+            return ""
+        result = resp.json()
+        location = result.get("location", "")
+        if location:
+            print(f"  ✅ 获取到重定向 location: {location[:80]}...")
+        else:
+            print("  ⚠️ 响应中未包含 location 字段")
+        return location
+    except requests.exceptions.Timeout:
+        print("  ❌ 请求超时")
+        return ""
+    except Exception as e:
+        print(f"  ❌ 授权异常: {e}")
+        return ""
+
+def do_discord_login(sb, discord_token):
+    print("\n🔑 通过 Discord Token 登录...")
+    try:
+        sb.delete_all_cookies()
+        sb.execute_script("localStorage.clear();")
+        print("🧹 已清除 cookie 和本地存储")
+    except:
+        pass
+
+    print("🌐 预访问 bot-hosting 首页，建立会话上下文...")
+    try:
+        sb.open("https://bot-hosting.net/")
+        sb.wait_for_ready_state_complete()
+        time.sleep(2)
+    except Exception as e:
+        print(f"⚠️ 预访问首页失败: {e}")
+
+    max_attempts = 2
+    for attempt in range(1, max_attempts + 1):
+        print(f"\n🔄 Discord OAuth 尝试 {attempt}/{max_attempts}")
+        state = capture_discord_state(sb)
+        if not state:
+            print("❌ 获取 state 失败")
+            continue
+        location = discord_authorize(state, discord_token)
+        if not location:
+            print("❌ 授权请求失败")
+            continue
+        print("  ✅ 获取到授权回调地址，准备跳转...")
+        try:
+            sb.uc_open_with_reconnect(location, reconnect_time=4)
+            time.sleep(3)
+        except Exception as e:
+            print(f"  ❌ 跳转异常: {e}")
+            continue
+        current_url = sb.get_current_url()
+        print(f"  🌐 跳转后 URL: {current_url}")
+        if "bot-hosting.net" in current_url and "/login" not in current_url:
+            print("  ✅ Discord OAuth 登录成功，已到达 bot-hosting 受保护页面")
+            return True
+        print("  ⏳ 等待重定向到 bot-hosting 页面...")
+        for i in range(30):
+            url = sb.get_current_url()
+            if "bot-hosting.net" in url and "/login" not in url:
+                print("  ✅ Discord OAuth 登录成功，已到达 bot-hosting 受保护页面")
+                return True
+            if "error=disconnect" in url:
+                print("  ⚠️ 检测到 error=disconnect，尝试刷新页面...")
+                sb.refresh()
+                time.sleep(2)
+                continue
+            time.sleep(0.5)
+        print("  ❌ 本次尝试超时，准备重试")
+    print("❌ 所有 Discord OAuth 尝试均失败")
+    return False
+
+# ---------- 核心处理 ----------
 def process_account(account, idx):
     email = account.get("email", f"账号{idx+1}")
     session_token = account.get("session_token", "")
@@ -190,7 +485,7 @@ def process_account(account, idx):
 
         # ---------- 执行续期 ----------
         renew_success = False
-        max_attempts = 3  # 增加重试次数
+        max_attempts = 3
         for attempt in range(1, max_attempts + 1):
             if renew_success:
                 break
@@ -227,7 +522,6 @@ def process_account(account, idx):
 
                 # 尝试使用 uc_gui_handle_cf 或 uc_gui_click_captcha
                 try:
-                    # 优先使用 handle_cf (更全面)
                     sb.uc_gui_handle_cf()
                     print("✅ Turnstile 已处理 (uc_gui_handle_cf)")
                 except Exception as e:
@@ -240,13 +534,11 @@ def process_account(account, idx):
 
                 # 等待验证完成（检测模态框消失或出现成功标志）
                 print("⏳ 等待 Turnstile 验证完成...")
-                for i in range(30):  # 最多等待30秒
+                for i in range(30):
                     try:
-                        # 如果模态框消失，说明验证可能已完成
                         if not sb.is_element_visible(modal_selector, timeout=0.5):
                             print("✅ 模态框已消失，验证可能完成")
                             break
-                        # 检查是否有错误提示
                         if sb.is_element_visible('[class*="error"]', timeout=0.5):
                             print("⚠️ 检测到验证错误，可能失败")
                             break
@@ -256,7 +548,6 @@ def process_account(account, idx):
                 else:
                     print("⚠️ 验证超时，但继续尝试")
 
-                # 等待一小段时间让页面稳定
                 time.sleep(3)
 
                 # ---------- 点击模态框内续期按钮 ----------
@@ -282,7 +573,6 @@ def process_account(account, idx):
                 if not clicked:
                     print("❌ 未找到续期按钮，可能弹窗未正确加载")
                     sb.save_screenshot(f"renew_button_not_found_{email}_{int(time.time())}.png")
-                    # 尝试强制关闭模态框并重试
                     try:
                         sb.driver.execute_script("""
                             var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
@@ -343,7 +633,6 @@ def process_account(account, idx):
                         break
                     else:
                         print("❌ 续期失败，准备重试")
-                        # 尝试关闭模态框并重试
                         try:
                             sb.driver.execute_script("""
                                 var modal = document.querySelector('.modal, .overlay, [role="dialog"]');
@@ -351,7 +640,6 @@ def process_account(account, idx):
                             """)
                         except:
                             pass
-                        # 刷新页面重置状态
                         sb.open("https://bot-hosting.net/a/billings")
                         sb.wait_for_ready_state_complete()
                         time.sleep(3)
@@ -393,3 +681,50 @@ def process_account(account, idx):
             print("✅ SESSION_TOKEN 无需更新")
 
         print(f"🏁 账号 {email} 处理完毕")
+
+# ---------- 账号构建 ----------
+def build_accounts():
+    accounts = []
+    if ACCOUNTS_JSON:
+        try:
+            accounts = json.loads(ACCOUNTS_JSON)
+            if isinstance(accounts, list):
+                print(f"✅ 从 ACCOUNTS_JSON 加载了 {len(accounts)} 个账号")
+                return accounts
+        except:
+            print("⚠️ ACCOUNTS_JSON 解析失败，回退到单账号模式")
+    if SESSION_TOKEN or DISCORD_TOKEN:
+        accounts.append({
+            "email": EMAIL or "default@example.com",
+            "session_token": SESSION_TOKEN,
+            "discord_token": DISCORD_TOKEN,
+            "secret_name": "SESSION_TOKEN"
+        })
+        print("ℹ️ 使用单账号模式")
+    else:
+        print("ℹ️ 未配置任何账号，脚本终止。")
+        sys.exit(1)
+    return accounts
+
+# ---------- 主函数 ----------
+def main():
+    print("#" * 25)
+    print("   Bot-hosting 自动续期（多账号 + 代理）")
+    print("#" * 25)
+
+    accounts = build_accounts()
+    if not accounts:
+        print("❌ 没有可用的账号，脚本退出。")
+        sys.exit(1)
+
+    for idx, acc in enumerate(accounts):
+        print(f"\n{'='*30} 处理第 {idx+1}/{len(accounts)} 个账号 {'='*30}")
+        process_account(acc, idx)
+        if idx < len(accounts) - 1:
+            print("⏳ 等待 3分钟 后处理下一个账号...")
+            time.sleep(180)
+
+    print("\n✅ 所有账号处理完成。")
+
+if __name__ == "__main__":
+    main()
