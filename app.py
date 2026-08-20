@@ -32,7 +32,7 @@ _LOGIN_METHOD = "SESSION_TOKEN"
 
 # ---------- 所有核心函数（未改动） ----------
 def get_cookie_info(sb, name):
-    cookies = sb.get_cookies()
+    cookies = sb.driver.get_cookies()
     for c in cookies:
         if c.get('name') == name:
             value = c.get('value')
@@ -355,7 +355,7 @@ def run_for_account(email, session_token, discord_token, account_label=""):
             print("📝 注入 Cookie...")
             for name, value in COOKIES.items():
                 if value:
-                    sb.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
+                    sb.driver.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
             sb.open("https://bot-hosting.net/a/billings")
             sb.wait_for_ready_state_complete()
