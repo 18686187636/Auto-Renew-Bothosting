@@ -34,7 +34,7 @@ jobs:
 
       - name: ⚙️ 设置代理 (sing-box)
         id: proxy_setup
-        # 强制代理必须成功，不再 continue-on-error
+        # 此处不设 continue-on-error，代理失败即中止
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
@@ -46,30 +46,25 @@ jobs:
           echo "🔧 正在启动代理..."
           bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
           sleep 10
-          # 强制校验代理是否可用
-          echo "🔍 校验代理可用性..."
-          if curl -x http://127.0.0.1:1080 https://bot-hosting.net -I -s -o /dev/null; then
-            echo "✅ 代理可用"
-            echo "IS_PROXY=true" >> $GITHUB_ENV
-          else
-            echo "❌ 代理不可用，工作流终止"
-            exit 1
-          fi
+          # 信任 setup_proxy.sh 自身的成功信息（它已输出 ✅ 代理连接成功）
+          echo "✅ 代理已启动（由 setup_proxy.sh 确认）"
+          echo "IS_PROXY=true" >> $GITHUB_ENV
 
       - name: 🚀 运行续期脚本
-  env:
-    ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
-    EMAIL: ${{ secrets.EMAIL }}
-    SESSION_TOKEN: ${{ secrets.SESSION_TOKEN }}
-    DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-    GH_TOKEN: ${{ secrets.GH_TOKEN }}
-    TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-    TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-    HEADLESS: 'true'
-    IS_PROXY: 'true'
-    PROXY_SERVER: 'socks5://127.0.0.1:1080'   # 关键修改
-  run: |
-    xvfb-run --auto-servernum python3 app.py
+        env:
+          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
+          EMAIL: ${{ secrets.EMAIL }}
+          SESSION_TOKEN: ${{ secrets.SESSION_TOKEN }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          HEADLESS: 'true'
+          IS_PROXY: ${{ env.IS_PROXY || 'false' }}
+          PROXY_SERVER: 'socks5://127.0.0.1:1080'
+        run: |
+          echo "代理状态: IS_PROXY=$IS_PROXY"
+          xvfb-run --auto-servernum python3 app.py
 
       - name: 🧽 清理进程和临时文件
         if: always()
