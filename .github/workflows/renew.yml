@@ -57,20 +57,19 @@ jobs:
           fi
 
       - name: 🚀 运行续期脚本
-        env:
-          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
-          EMAIL: ${{ secrets.EMAIL }}
-          SESSION_TOKEN: ${{ secrets.SESSION_TOKEN }}
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          HEADLESS: 'true'
-          IS_PROXY: ${{ env.IS_PROXY || 'false' }}
-          PROXY_SERVER: 'http://127.0.0.1:1080'
-        run: |
-          echo "代理状态: IS_PROXY=$IS_PROXY"
-          xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" python3 app.py
+  env:
+    ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
+    EMAIL: ${{ secrets.EMAIL }}
+    SESSION_TOKEN: ${{ secrets.SESSION_TOKEN }}
+    DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+    GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+    TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+    HEADLESS: 'true'
+    IS_PROXY: 'true'
+    PROXY_SERVER: 'socks5://127.0.0.1:1080'   # 关键修改
+  run: |
+    xvfb-run --auto-servernum python3 app.py
 
       - name: 🧽 清理进程和临时文件
         if: always()
