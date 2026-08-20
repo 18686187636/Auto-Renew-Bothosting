@@ -2,15 +2,15 @@ name: Auto Renew Bot-hosting
 
 on:
   schedule:
-    - cron: '0 1 * * *'   # 每天 UTC 1:00 (北京时间 9:00)
-  workflow_dispatch:       # 手动触发
+    - cron: '0 1 * * *'
+  workflow_dispatch:
 
 jobs:
   Renew-bot:
     runs-on: ubuntu-latest
     permissions:
-      actions: write       # 用于删除旧的运行记录
-      contents: read       # 读取仓库内容
+      actions: write
+      contents: read
 
     steps:
       - name: 📥 检出代码
@@ -24,53 +24,52 @@ jobs:
       - name: 🛠️ 安装系统依赖、Chrome 和 Python 包
         run: |
           sudo apt-get update
-          # 基础工具和中文字体
           sudo apt-get install -y xvfb x11-utils xdotool scrot fonts-noto-cjk jq wget
-          # 安装 Google Chrome 稳定版（SeleniumBase 需要）
           wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
-          # 安装 Python 依赖（锁定版本）
           pip install seleniumbase==4.20.0 requests==2.31.0
-          # 安装 ChromeDriver（由 seleniumbase 管理）
           seleniumbase install chromedriver
 
       - name: ⚙️ 设置代理 (sing-box)
-        continue-on-error: true   # 代理失败时不中断工作流（但脚本会因直连失败而报错）
+        id: proxy_setup
+        # 强制代理必须成功，不再 continue-on-error
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
-          # 如果未配置 NODE_LINK，跳过代理设置
           if [ -z "$NODE_LINK" ]; then
-            echo "ℹ️ NODE_LINK 未设置，跳过代理启动"
+            echo "ℹ️ NODE_LINK 未设置，将不使用代理"
+            echo "IS_PROXY=false" >> $GITHUB_ENV
             exit 0
           fi
-          # 下载并执行代理配置脚本（请确保脚本来源可信）
+          echo "🔧 正在启动代理..."
           bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
-          # 等待代理完全就绪（sing-box 可能需要几秒）
           sleep 10
-          # 测试代理是否可访问目标网站（可选）
-          curl -x http://127.0.0.1:1080 https://bot-hosting.net -I -s -o /dev/null && echo "✅ 代理可用" || echo "⚠️ 代理可能不可用"
+          # 强制校验代理是否可用
+          echo "🔍 校验代理可用性..."
+          if curl -x http://127.0.0.1:1080 https://bot-hosting.net -I -s -o /dev/null; then
+            echo "✅ 代理可用"
+            echo "IS_PROXY=true" >> $GITHUB_ENV
+          else
+            echo "❌ 代理不可用，工作流终止"
+            exit 1
+          fi
 
       - name: 🚀 运行续期脚本
         env:
-          # 多账号配置（优先）
           ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
-          # 单账号配置（当 ACCOUNTS_JSON 为空时使用）
           EMAIL: ${{ secrets.EMAIL }}
           SESSION_TOKEN: ${{ secrets.SESSION_TOKEN }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          # SeleniumBase 运行参数
-          HEADLESS: 'true'                     # 无头模式
-          IS_PROXY: 'true'                     # 启用代理
-          PROXY_SERVER: 'http://127.0.0.1:1080' # sing‑box 默认 HTTP 代理端口（与 SOCKS5 同端口但协议不同）
+          HEADLESS: 'true'
+          IS_PROXY: ${{ env.IS_PROXY || 'false' }}
+          PROXY_SERVER: 'http://127.0.0.1:1080'
         run: |
-          # 如果未配置代理且 IS_PROXY=true，脚本会尝试使用 PROXY_SERVER，但可能失败；这里可以动态判断
-          # 但为了简单，我们保持原样。如需更灵活，可检测代理进程是否存在。
+          echo "代理状态: IS_PROXY=$IS_PROXY"
           xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" python3 app.py
 
       - name: 🧽 清理进程和临时文件
@@ -82,7 +81,7 @@ jobs:
           pkill -f Xvfb || true
           rm -f sing-box sing-box-config.json sing-box.log
 
-      - name: 🧹 清理旧运行记录（保留最近 1 条）
+      - name: 🧹 清理旧运行记录
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
