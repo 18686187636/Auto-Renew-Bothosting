@@ -1,199 +1,183 @@
-# 🚀 Bot‑hosting 多账号自动续期
+# Bot-hosting 自动续期（多账号版）
 
-[![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-自动续期-blue?logo=githubactions)](.github/workflows/renew.yml)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-green?logo=python)](https://www.python.org/)
-
-> 通过 GitHub Actions 定时为 [bot‑hosting.net](https://bot‑hosting.net) 的多个账号自动续期免费计划（每 4 天续期一次），并自动更新过期的 `SESSION_TOKEN`，全程无人值守。  
-> **支持任意代理协议（含 VLESS / VMESS / Trojan / SOCKS5）**，一键部署，Telegram 实时通知。
+> 基于 SeleniumBase 和 GitHub Actions，自动续期 [Bot‑hosting.net](https://bot‑hosting.net) 的免费服务，支持多账号、自动处理 Turnstile 人机验证，并通过 Telegram 推送结果通知。
 
 ---
 
-## 📖 目录
+## 📖 项目简介
 
-- [功能特点](#-功能特点)
-- [准备工作](#-准备工作)
-- [配置说明](#-配置说明)
-  - [GitHub Secrets](#-github-secrets)
-  - [多账号 JSON 格式](#-多账号-json-格式)
-- [GitHub Actions 工作流](#-github-actions-工作流)
-- [本地运行](#-本地运行)
-- [截图调试](#-截图调试)
-- [常见问题](#-常见问题)
-- [许可证](#-许可证)
+本项目通过模拟浏览器操作，自动登录 Bot‑hosting 账单页面，检测并点击续期按钮，完成后可自动更新 `SESSION_TOKEN` 并发送通知。  
+**核心亮点**：
 
----
-
-## ✨ 功能特点
-
-- ✅ **多账号支持** – 使用单个 JSON 数组管理任意数量的 bot‑hosting 账号。
-- ✅ **双登录机制** – 优先使用 `SESSION_TOKEN`，失效后自动切换至 Discord OAuth（基于 `DISCORD_TOKEN`）。
-- ✅ **自动续期** – 检测并点击“Renew”按钮，通过 Turnstile 验证，续期 4 天。
-- ✅ **智能 Token 更新** – 续期成功后自动提取新的 `SESSION_TOKEN` 并更新到 GitHub Secrets（需 `GH_TOKEN` 权限）。
-- ✅ **代理自由** – 支持 **VLESS / VMESS / Trojan / SOCKS5 / HTTP(S)** 等任意代理协议（内置 sing‑box 转换）。
-- ✅ **通知推送** – 支持 Telegram 实时通知每个账号的执行结果，包含到期日期。
-- ✅ **完全无头运行** – 适配 GitHub Actions 无图形化环境，也可本地调试。
-- ✅ **截图调试** – 每次运行自动生成关键步骤截图，可下载排查问题。
+- ✅ **双登录机制**：优先使用 `SESSION_TOKEN`，失效后自动切换 Discord OAuth（需提供 `DISCORD_TOKEN`）。
+- ✅ **自动处理 Turnstile**：利用 SeleniumBase 的 `uc` 模式点击验证，保留核心逻辑以保证高通过率。
+- ✅ **多账号支持**：通过 `ACCOUNTS_JSON` 环境变量批量管理多个账号，依次续期。
+- ✅ **代理支持**：可配置 HTTP 代理，适用于受限网络环境（如国内服务器）。
+- ✅ **GitHub Secrets 自动更新**（单账号模式）：自动将新 `SESSION_TOKEN` 写回仓库 Secret。
+- ✅ **Telegram 通知**：续期成功/失败/未到期等状态实时推送。
 
 ---
 
-## 🛠 准备工作
+## 🚀 功能特性
 
-1. **Fork 或 Clone 本仓库**，并将以下文件放入仓库：
-   - `renew.py` – 续期主脚本
-   - `.github/workflows/renew.yml` – GitHub Actions 工作流
-
-2. **准备各账号的登录凭据**（至少提供 `session_token` 或 `discord_token` 之一）：
-   - 从浏览器 Cookie 获取 `session_token`。
-   - 或从 Discord 开发者工具获取 `discord_token`。
-
-3. **（可选）** 准备一个具有 **写权限** 的 GitHub Personal Access Token（`GH_TOKEN`），用于自动更新 Secrets。
-
-4. **（可选）** 准备 Telegram Bot Token 和 Chat ID，用于接收通知。
+- 每日定时执行（可自定义 cron）
+- 支持 `workflow_dispatch` 手动触发
+- 无头浏览器运行，节省资源
+- 随机延迟降低风控
+- 完整的日志输出，便于调试
 
 ---
 
-## ⚙️ 配置说明
+## 📦 前置要求
 
-### 🔐 GitHub Secrets
-
-在仓库 **Settings → Secrets and variables → Actions** 中设置以下 Secrets：
-
-| Secret 名称 | 是否必须 | 说明 |
-|-------------|----------|------|
-| `ACCOUNTS_JSON` | ✅ **必须** | 多账号 JSON 数组（格式见下文）。 |
-| `NODE_LINK` | ❌ 可选 | 任意代理链接（如 `vless://...`、`socks5://...`、`vmess://...`），用于网络加速或绕过限制。 |
-| `GH_TOKEN` | ⭐ 强烈推荐 | GitHub PAT，需要 `repo` 或 `workflow` 权限，用于自动更新 `SESSION_TOKEN`。 |
-| `TG_BOT_TOKEN` | ❌ 可选 | Telegram Bot Token，用于通知。 |
-| `TG_CHAT_ID` | ❌ 可选 | 接收通知的 Telegram 用户/群组 ID。 |
-
-> **注意**：若未设置 `ACCOUNTS_JSON`，脚本会回退到传统单账号变量（`EMAIL`、`SESSION_TOKEN`、`DISCORD_TOKEN`），但推荐统一使用 JSON 格式。
+- **GitHub 仓库**（推荐使用 Actions 自动运行）
+- **Secrets 配置**（见下文）
+- （本地运行）Python 3.12+，安装依赖：`seleniumbase`, `requests`，并安装 Chrome 浏览器
 
 ---
 
-### 📦 多账号 JSON 格式
+## 🔧 配置说明
 
-`ACCOUNTS_JSON` 是一个 JSON 数组，每个元素代表一个账号：
+### 1. GitHub Secrets 设置
+
+在仓库 `Settings` → `Secrets and variables` → `Actions` 中添加以下 Secrets：
+
+| Secret 名称 | 说明 | 是否必须 |
+|------------|------|---------|
+| `SESSION_TOKEN` | Bot‑hosting 的会话令牌（从浏览器 Cookie 中获取） | 可选（至少提供一种登录方式） |
+| `DISCORD_TOKEN` | Discord 用户令牌（用于 OAuth 登录） | 可选（至少提供一种登录方式） |
+| `EMAIL` | 账号邮箱（仅用于通知显示） | 推荐 |
+| `GH_TOKEN` | GitHub Personal Access Token（用于自动更新 SESSION_TOKEN） | 可选（单账号模式推荐） |
+| `TG_BOT_TOKEN` | Telegram Bot Token | 可选（如需通知） |
+| `TG_CHAT_ID` | Telegram 接收消息的 Chat ID | 可选（如需通知） |
+| `ACCOUNTS_JSON` | 多账号 JSON 配置（详见下文） | 可选（多账号模式必须） |
+| `NODE_LINK` | （可选）代理订阅链接，用于 `sing‑box` 代理 | 可选 |
+| `HEADLESS` | 是否无头模式（`true`/`false`） | 可选，默认 `false` |
+| `IS_PROXY` | 是否启用代理（`true`/`false`） | 可选，默认 `false` |
+| `PROXY_SERVER` | 代理地址（如 `http://127.0.0.1:1080`） | 可选，默认 `http://127.0.0.1:1080` |
+
+---
+
+### 2. 单账号模式（传统方式）
+
+在 Secrets 中配置 `SESSION_TOKEN` 或 `DISCORD_TOKEN`（至少一个），以及 `EMAIL`、`GH_TOKEN`（如需自动更新）等。脚本会直接使用这些变量。
+
+---
+
+### 3. 多账号模式（推荐）
+
+在 Secrets 中添加 `ACCOUNTS_JSON`，其值为一个 JSON 数组，每个元素包含以下字段：
 
 ```json
 [
   {
-    "email": "user1@example.com",
-    "session_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    "secret_name": "SESSION_TOKEN"
+    "email": "account1@gmail.com",
+    "session_token": "MTA...",
+    "discord_token": "MTE...",
+    "label": "主账号"          // 可选，用于通知显示
   },
   {
-    "email": "user2@gmail.com",
-    "discord_token": "MTIzNDU2Nzg5MDEyMzQ1Njc4OQ.G...",
-    "secret_name": "SESSION_TOKEN_2"
-  },
-  {
-    "email": "user3@outlook.com",
-    "session_token": "abc...",
-    "discord_token": "def...",
-    "secret_name": "MY_CUSTOM_TOKEN"
+    "email": "account2@outlook.com",
+    "discord_token": "NTI...",
+    "label": "小号"
   }
 ]
 ```
 
-**字段说明：**
-
-| 字段 | 必填 | 描述 |
-|------|------|------|
-| `email` | ✅ | 仅用于通知和日志显示，可任意填写。 |
-| `session_token` | ⚠️ 至少其一 | bot‑hosting 的登录 Cookie（优先使用）。 |
-| `discord_token` | ⚠️ 至少其一 | Discord 用户 Token，作为备用登录方式。 |
-| `secret_name` | 可选 | 该账号的 `SESSION_TOKEN` 更新到哪个 GitHub Secret。若不指定，索引 0 使用 `SESSION_TOKEN`，索引 ≥1 使用 `SESSION_TOKEN_索引`。 |
+- `email` 和 `label` 仅用于通知，不参与验证。
+- 每个账号至少提供 `session_token` 或 `discord_token`（建议两者都提供，提高容错）。
+- 多账号模式下，`GH_TOKEN` 会被脚本自动忽略（避免互相覆盖），您需定期手动更新 JSON 中的 Token（或自行扩展逻辑）。
 
 ---
 
-### 🧰 其他环境变量（工作流或本地）
+## 🛠 使用方法
 
-脚本也读取以下环境变量（可在工作流 `env` 或本地 `.env` 中设置）：
+### 方式一：GitHub Actions（推荐）
 
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| `IS_PROXY` | `false` | 是否启用代理（通常由 `NODE_LINK` 自动控制）。 |
-| `PROXY_SERVER` | `http://127.0.0.1:1080` | 代理服务器地址（仅在 `IS_PROXY=true` 时生效）。 |
-| `HEADLESS` | `false` | 是否无头模式（建议 `false` 以便有头调试）。 |
-| `GH_TOKEN` | - | GitHub PAT（也可通过 Secret 传递）。 |
-| `TG_BOT_TOKEN` | - | Telegram Bot Token。 |
-| `TG_CHAT_ID` | - | Telegram 接收者 ID。 |
+1. Fork 本仓库。
+2. 按上述说明配置 Secrets。
+3. 默认每天 UTC 1:00（北京时间 9:00）自动运行，也可在 Actions 页面手动触发 `workflow_dispatch`。
+4. 查看运行日志和 Telegram 通知结果。
 
----
-
-## ⚡ GitHub Actions 工作流
-
-工作流文件 `.github/workflows/renew.yml` 已内置：
-
-- **定时触发**：每天 UTC 1:00（北京时间 9:00）自动运行。
-- **手动触发**：支持 `workflow_dispatch` 随时运行。
-
-工作流会自动：
-1. 设置 Python 环境，安装 SeleniumBase 等依赖。
-2. 若有 `NODE_LINK`，自动下载 sing‑box 并转换任意代理协议为本地 SOCKS5。
-3. 运行 `renew.py` 处理所有账号。
-4. 上传关键步骤的截图（`*.png`）作为 Artifact，方便调试。
-5. 清理进程和临时文件。
-
----
-
-## 🖥 本地运行
-
-克隆仓库后，在本地终端执行：
+### 方式二：本地运行
 
 ```bash
 # 安装依赖
 pip install seleniumbase requests
 
+# 安装 Chrome 浏览器（Linux）
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+sudo apt-get update && sudo apt-get install -y google-chrome-stable
+
 # 设置环境变量（示例）
-export ACCOUNTS_JSON='[{"email":"test@example.com","session_token":"xxx"}]'
-export NODE_LINK="socks5://127.0.0.1:1080"   # 若需要代理
-export HEADLESS=false                        # 有头模式调试
+export SESSION_TOKEN="your_session_token"
+export DISCORD_TOKEN="your_discord_token"
+export EMAIL="your_email"
+export TG_BOT_TOKEN="your_bot_token"
+export TG_CHAT_ID="your_chat_id"
+export HEADLESS="true"
+# 若有代理
+export IS_PROXY="true"
+export PROXY_SERVER="http://127.0.0.1:1080"
 
 # 运行脚本
-python renew.py
+xvfb-run --auto-servernum python3 app.py
 ```
-
-> 本地运行时需要安装 Chrome 浏览器及对应的 WebDriver（seleniumbase 会自动处理）。
 
 ---
 
-## 📷 截图调试
+## 📋 工作流说明
 
-脚本会在关键步骤自动截图（如点击续期按钮、Turnstile 验证、续期成功等），文件命名格式为 `描述_邮箱_时间戳.png`。
+GitHub Actions 工作流（`.github/workflows/renew.yml`）会执行以下步骤：
 
-在 GitHub Actions 运行完成后，您可以在 **Artifacts** 区域下载 `screenshots.zip`，解压即可查看所有截图，精确定位问题。
+1. 检出代码、设置 Python 3.12。
+2. 安装系统依赖（XVFB、Chrome、中文字体等）和 Python 依赖。
+3. （可选）下载并启动 sing‑box 代理（需 `NODE_LINK`）。
+4. 运行 `app.py`，完成所有账号的续期。
+5. 清理进程和临时文件。
+6. 自动保留最近 1 次运行记录，删除更旧的记录。
 
-![Artifacts 截图示例](https://docs.github.com/assets/cb-23094/images/help/actions/artifact-overview.png)
+> 工作流文件位于仓库的 `.github/workflows/` 目录下，可自行调整 cron 时间。
+
+---
+
+## ⚠️ 注意事项
+
+- **人机验证**：Turnstile 验证采用 `uc_gui_click_captcha()` 方式，该方式可能因网站更新而失效。若频繁失败，请更新 SeleniumBase 或调整等待逻辑。
+- **代理安全**：若使用外部代理脚本，请确保其来源可信，避免安全风险。
+- **多账号风控**：连续处理多个账号可能触发 IP 风控，建议开启代理并增加延迟（脚本已内置随机延迟 5～15 秒）。
+- **SESSION_TOKEN 获取**：登录 Bot‑hosting 后，在浏览器开发者工具中复制 Cookie 中的 `session_token` 值。
+- **Discord Token 权限**：需具备 `identify` 和 `email` 权限，建议使用用户 Token（非 Bot Token）。
 
 ---
 
 ## ❓ 常见问题
 
-**Q：为什么续期总是失败？**  
-A：最常见的原因是 Turnstile 验证未成功。可以查看截图，确认“Renew for 4 days”按钮是否出现。若代理不稳定，可更换 `NODE_LINK`。
+### Q: 如何获取 `SESSION_TOKEN`？
+A: 在浏览器中登录 Bot‑hosting，按 F12 打开开发者工具 → Application → Cookies → `https://bot-hosting.net`，复制 `session_token` 的值。
 
-**Q：如何获取 `session_token`？**  
-A：登录 [bot‑hosting.net](https://bot‑hosting.net)，按 F12 → Application → Cookies → 复制 `session_token` 的值。
+### Q: 多账号模式下如何更新 Token？
+A: 当前版本暂不支持自动更新多账号的 JSON Secret，您需要手动更新 `ACCOUNTS_JSON` 中的 Token。您可以编写额外脚本调用 GitHub API 更新 Secret，或定期手动替换。
 
-**Q：如何获取 `discord_token`？**  
-A：打开 Discord 网页版，按 F12 → Network → 任意请求头中找 `authorization` 字段。
+### Q: 运行日志显示 Turnstile 验证超时怎么办？
+A: 可尝试增加等待时间（修改 `wait_for_turnstile_pass` 的 `timeout` 参数），或检查代理是否稳定。
 
-**Q：`NODE_LINK` 支持哪些协议？**  
-A：任何 sing‑box 支持的协议，包括 **VLESS、VMESS、Trojan、Shadowsocks、SOCKS5、HTTP(S)** 等。脚本会自动解析并转换为本地代理。
-
-**Q：自动更新 Secret 需要什么权限？**  
-A：`GH_TOKEN` 至少需要 `repo` 或 `workflow` 写入权限。推荐创建一个专用的 Fine‑grained PAT，仅授予当前仓库的 Secrets 读写权限。
-
-**Q：多个账号的 Secret 名称是什么？**  
-A：若未指定 `secret_name`，索引 0 使用 `SESSION_TOKEN`，索引 1 使用 `SESSION_TOKEN_1`，依此类推。您可以在 Secrets 中提前创建这些变量。
+### Q: 如何禁用无头模式以便调试？
+A: 在 Secrets 中设置 `HEADLESS=false`，然后在本地运行（不使用 `xvfb-run`）即可看到浏览器窗口。
 
 ---
 
 ## 📄 许可证
 
-本项目基于 [MIT License](LICENSE) 开源，仅供学习交流使用。使用前请确保遵守 [bot‑hosting.net](https://bot‑hosting.net) 的服务条款。
+本项目基于 MIT 许可证开源，仅供学习交流使用。请遵守 Bot‑hosting 的服务条款，合理使用。
 
 ---
 
-**Happy Renewing! 🎉**
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request 来改进脚本。如有疑问，请附上详细日志以便排查。
+
+---
+
+**Happy Auto Renew! 🎉**
