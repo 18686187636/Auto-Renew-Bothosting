@@ -1,4 +1,4 @@
-name: Auto Renew Bot-hosting
+name: Auto Renew Bot-hosting (Multi-Account via Matrix)
 
 on:
   schedule:
@@ -6,8 +6,15 @@ on:
   workflow_dispatch:
 
 jobs:
-  Renew-bot:
+  renew:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # 允许其他账号继续运行，即使某个失败
+      matrix:
+        # 从 secrets.ACCOUNTS_JSON 解析账号列表，并构建矩阵
+        # 使用 fromJSON 将 JSON 数组转换为 GitHub Actions 矩阵
+        account: ${{ fromJSON(secrets.ACCOUNTS_JSON) }}
+
     permissions:
       actions: write
       contents: read
@@ -29,12 +36,11 @@ jobs:
           sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
-          pip install seleniumbase==4.20.0 requests==2.31.0
+          pip install seleniumbase requests
           seleniumbase install chromedriver
 
       - name: ⚙️ 设置代理 (sing-box)
-        id: proxy_setup
-        # 此处不设 continue-on-error，代理失败即中止
+        continue-on-error: true
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
@@ -43,28 +49,25 @@ jobs:
             echo "IS_PROXY=false" >> $GITHUB_ENV
             exit 0
           fi
-          echo "🔧 正在启动代理..."
           bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
           sleep 10
-          # 信任 setup_proxy.sh 自身的成功信息（它已输出 ✅ 代理连接成功）
           echo "✅ 代理已启动（由 setup_proxy.sh 确认）"
           echo "IS_PROXY=true" >> $GITHUB_ENV
 
-      - name: 🚀 运行续期脚本
+      - name: 🚀 运行续期脚本（单账号）
         env:
-          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
-          EMAIL: ${{ secrets.EMAIL }}
-          SESSION_TOKEN: ${{ secrets.SESSION_TOKEN }}
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          EMAIL: ${{ matrix.account.email }}
+          SESSION_TOKEN: ${{ matrix.account.session_token }}
+          DISCORD_TOKEN: ${{ matrix.account.discord_token }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           HEADLESS: 'true'
           IS_PROXY: ${{ env.IS_PROXY || 'false' }}
-          PROXY_SERVER: 'socks5://127.0.0.1:1080'
+          PROXY_SERVER: 'socks5://127.0.0.1:1080'   # 根据代理实际协议调整
         run: |
           echo "代理状态: IS_PROXY=$IS_PROXY"
-          xvfb-run --auto-servernum python3 app.py
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" python3 app.py
 
       - name: 🧽 清理进程和临时文件
         if: always()
