@@ -452,7 +452,7 @@ def process_account(email, session_token, discord_token, account_label=""):
             try:
                 sb.sleep(2)
                 sb.click(outer_renew_selector)
-                sb.sleep(15)  # 等待模态框加载
+                sb.sleep(18)  # 增加等待时间，确保弹窗完全加载（原为15秒）
             except Exception as e:
                 print(f"❌ 点击外部按钮失败: {e}")
                 send_telegram_message(format_notification(
@@ -462,29 +462,25 @@ def process_account(email, session_token, discord_token, account_label=""):
                 ))
                 return
 
-            # ============ 检测弹窗中的倒计时 ============
-            # 等待弹窗中的倒计时元素出现（最长等待5秒）
-            try:
-                sb.wait_for_element_present('*:contains("Renew in")', timeout=5)
-                modal_text = sb.get_page_source()
-                match = re.search(r"Renew in (\d{2}:\d{2}:\d{2})", modal_text)
-                if match:
-                    modal_countdown = match.group(1)
-                    print(f"⏳ 弹窗中检测到倒计时: {modal_countdown}，未到续期时间")
-                    friendly = format_countdown(modal_countdown)
-                    send_telegram_message(
-                        format_notification(
-                            "⏳ 未到续期时间",
-                            extra=f"⏱️ 可续期时间: {friendly}后",
-                            expiry_date=current_expiry or "（未获取到）",
-                            account_label=account_label or email
-                        )
+            # ============ 检测弹窗中的倒计时（直接正则搜索） ============
+            modal_text = sb.get_page_source()
+            match = re.search(r"Renew in (\d{2}:\d{2}:\d{2})", modal_text)
+            if match:
+                modal_countdown = match.group(1)
+                print(f"⏳ 弹窗中检测到倒计时: {modal_countdown}，未到续期时间")
+                friendly = format_countdown(modal_countdown)
+                send_telegram_message(
+                    format_notification(
+                        "⏳ 未到续期时间",
+                        extra=f"⏱️ 可续期时间: {friendly}后",
+                        expiry_date=current_expiry or "（未获取到）",
+                        account_label=account_label or email
                     )
-                    return  # 直接退出，不再继续
-            except Exception as e:
-                # 如果超时或未找到，说明没有倒计时，继续执行后面的 Turnstile 验证
+                )
+                return  # 直接退出，不再继续
+            else:
                 print("ℹ️ 弹窗中未检测到倒计时，继续续期流程")
-            # ==========================================
+            # =========================================================
 
             # 处理弹窗中的 Turnstile
             print("🔒 检测弹窗中的 Turnstile 验证...")
