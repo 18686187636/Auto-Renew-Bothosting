@@ -20,7 +20,11 @@ if DISCORD_TOKEN:
     _parts = DISCORD_TOKEN.split(",", 1)
     DC_TOKEN = _parts[-1].strip()
 
-# 构造cookie（全局，单账号使用，多账号模式会在 process_account 内覆盖）
+if not SESSION_TOKEN and not DC_TOKEN:
+    print("ℹ️ 未配置 SESSION_TOKEN 和 DISCORD_TOKEN,脚本终止。")
+    sys.exit(1)
+
+# 构造cookie
 COOKIES = {
     "session_token": SESSION_TOKEN,
     "login": "true",
@@ -30,9 +34,9 @@ COOKIES = {
 # 记录本次登录方式（用于通知）
 _LOGIN_METHOD = "SESSION_TOKEN"
 
-# ---------- 所有核心函数 ----------
+# ---------- 以下所有函数完全与单账号版本一致，未做任何改动 ----------
 def get_cookie_info(sb, name):
-    cookies = sb.driver.get_cookies()
+    cookies = sb.get_cookies()
     for c in cookies:
         if c.get('name') == name:
             value = c.get('value')
@@ -87,28 +91,23 @@ def send_telegram_message(message: str):
     except Exception as e:
         print(f"❌ Telegram 发送失败: {e}")
 
-def format_notification(status: str, extra: str = "", error: str = "", expiry_date: str = "", account_label: str = ""):
+def format_notification(status: str, extra: str = "", error: str = "", expiry_date: str = ""):
     local_time = time.gmtime(time.time() + 8 * 3600)
     now = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
-    
-    if account_label:
-        account_prefix = f"👤 {account_label}"
-    else:
-        if '@' in EMAIL:
-            name, domain = EMAIL.split('@', 1)
-            if len(name) > 4:
-                masked_email = f"{name[:2]}****{name[-2:]}@{domain}"
-            else:
-                masked_email = f"{name}@{domain}"
+    if '@' in EMAIL:
+        name, domain = EMAIL.split('@', 1)
+        if len(name) > 4:
+            masked_email = f"{name[:2]}****{name[-2:]}@{domain}"
         else:
-            masked_email = EMAIL[:2] + '****'
-        account_prefix = f"👤 {masked_email}"
+            masked_email = f"{name}@{domain}"
+    else:
+        masked_email = EMAIL[:2] + '****'
     
     lines = [
         "🇫🇮 Bot-hosting 续期通知",
         "",
         f"{status}",
-        account_prefix,
+        f"👤 登录账户: {masked_email}",
     ]
     if _LOGIN_METHOD != "SESSION_TOKEN":
         lines.append(f"🔐 登录方式: {_LOGIN_METHOD}")
@@ -304,10 +303,11 @@ def do_discord_login(sb) -> bool:
     sb.save_screenshot("login_timeout.png")
     return False
 
-# ---------- 处理单个账号的函数 ----------
-def process_account(email, session_token, discord_token, account_label=""):
-    global _LOGIN_METHOD, SESSION_TOKEN, DISCORD_TOKEN, EMAIL, COOKIES, DC_TOKEN, GH_TOKEN
+# ---------- 处理单个账号的函数（原 main 主体，未做任何改动） ----------
+def process_account(email, session_token, discord_token):
+    global _LOGIN_METHOD, SESSION_TOKEN, DISCORD_TOKEN, EMAIL, COOKIES, DC_TOKEN
 
+    # 设置当前账号的凭据（覆盖全局变量）
     EMAIL = email
     SESSION_TOKEN = session_token
     DISCORD_TOKEN = discord_token
@@ -323,7 +323,7 @@ def process_account(email, session_token, discord_token, account_label=""):
     _LOGIN_METHOD = "SESSION_TOKEN"
 
     print("\n" + "#" * 25)
-    print(f"   Bot-hosting 自动续期 (账号: {account_label or email})")
+    print(f"   Bot-hosting 自动续期 (账号: {email})")
     print("#" * 25)
 
     IS_PROXY = os.environ.get("IS_PROXY", "false").lower() == "true"
@@ -357,7 +357,7 @@ def process_account(email, session_token, discord_token, account_label=""):
             print("📝 注入 Cookie...")
             for name, value in COOKIES.items():
                 if value:
-                    sb.driver.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
+                    sb.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
 
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
             sb.open("https://bot-hosting.net/a/billings")
@@ -400,52 +400,21 @@ def process_account(email, session_token, discord_token, account_label=""):
                 error_msg = "Discord OAuth 登录失败"
             elif SESSION_TOKEN and DC_TOKEN:
                 error_msg = "SESSION_TOKEN 和 Discord OAuth 均失败"
-            send_telegram_message(format_notification(
-                "❌ 登录失败",
-                error=error_msg,
-                account_label=account_label or email
-            ))
+            send_telegram_message(format_notification("❌ 登录失败", error=error_msg))
             return
 
         if _LOGIN_METHOD == "Discord Token":
             print("ℹ️ 本次使用 Discord OAuth 登录，新的 SESSION_TOKEN 将自动更新到 Secrets")
 
-        # 提取当前到期日期并计算剩余时间
+        # 提取当前到期日期
         sb.sleep(2)
         page_source = sb.get_page_source()
         current_expiry = extract_expiry_date(page_source)
         if current_expiry:
             print(f"📅 当前到期日期: {current_expiry}")
-            # 计算剩余时间
-            try:
-                expiry_dt = datetime.strptime(current_expiry, "%Y/%m/%d")
-                now = datetime.now()
-                remaining = expiry_dt - now
-                remaining_hours = remaining.total_seconds() / 3600
-                # 如果剩余时间超过 24 小时，认为未到续期时间
-                if remaining_hours > 24:
-                    days = remaining.days
-                    hours = int((remaining.seconds) / 3600)
-                    if days > 0:
-                        friendly = f"{days}天{hours}小时"
-                    else:
-                        friendly = f"{hours}小时"
-                    print(f"⏳ 距离到期还有 {friendly}，未到续期时间")
-                    send_telegram_message(
-                        format_notification(
-                            "⏳ 未到续期时间",
-                            extra=f"⏱️ 距离到期还有 {friendly}",
-                            expiry_date=current_expiry,
-                            account_label=account_label or email
-                        )
-                    )
-                    return  # 直接退出，不进行续期操作
-            except Exception as e:
-                print(f"⚠️ 解析到期日期失败: {e}")
         else:
             print("⚠️ 未能提取当前到期日期")
 
-        # 如果剩余时间 <= 24 小时，继续续期流程
         # 寻找外部续期按钮
         outer_renew_selector = None
         countdown_text = None
@@ -482,11 +451,7 @@ def process_account(email, session_token, discord_token, account_label=""):
                 sb.sleep(15)  # 等待模态框加载
             except Exception as e:
                 print(f"❌ 点击外部按钮失败: {e}")
-                send_telegram_message(format_notification(
-                    "❌ 续期失败",
-                    error="点击外部续期按钮出错",
-                    account_label=account_label or email
-                ))
+                send_telegram_message(format_notification("❌ 续期失败", error="点击外部续期按钮出错"))
                 return
 
             # 处理弹窗中的 Turnstile
@@ -507,11 +472,7 @@ def process_account(email, session_token, discord_token, account_label=""):
 
             if not turnstile_passed:
                 print("❌ Turnstile 验证最终未通过，脚本退出")
-                send_telegram_message(format_notification(
-                    "❌ 续期失败",
-                    error="Turnstile 验证未通过",
-                    account_label=account_label or email
-                ))
+                send_telegram_message(format_notification("❌ 续期失败", error="Turnstile 验证未通过"))
                 return
 
             # 点击续期按钮
@@ -542,8 +503,7 @@ def process_account(email, session_token, discord_token, account_label=""):
                     format_notification(
                         "✅ 续期成功",
                         extra=f"⏱️ 可续期时间: {format_countdown(new_countdown)}后",
-                        expiry_date=new_expiry or "（未获取到）",
-                        account_label=account_label or email
+                        expiry_date=new_expiry or "（未获取到）"
                     )
                 )
             else:
@@ -553,8 +513,7 @@ def process_account(email, session_token, discord_token, account_label=""):
                         format_notification(
                             "✅ 续期成功",
                             extra="到期日期已更新",
-                            expiry_date=new_expiry,
-                            account_label=account_label or email
+                            expiry_date=new_expiry
                         )
                     )
                 else:
@@ -563,8 +522,7 @@ def process_account(email, session_token, discord_token, account_label=""):
                         format_notification(
                             "⚠️ 续期可能未成功",
                             extra="请登录后台检查",
-                            expiry_date=current_expiry or "（未获取到）",
-                            account_label=account_label or email
+                            expiry_date=current_expiry or "（未获取到）"
                         )
                     )
 
@@ -576,8 +534,7 @@ def process_account(email, session_token, discord_token, account_label=""):
                     format_notification(
                         "⏳ 未到续期时间",
                         extra=f"⏱️ 可续期时间: {friendly}后",
-                        expiry_date=current_expiry or "（未获取到）",
-                        account_label=account_label or email
+                        expiry_date=current_expiry or "（未获取到）"
                     )
                 )
             else:
@@ -586,8 +543,7 @@ def process_account(email, session_token, discord_token, account_label=""):
                     format_notification(
                         "ℹ️ 无需续期",
                         extra="当前状态未知，请手动检查",
-                        expiry_date=current_expiry or "（未获取到）",
-                        account_label=account_label or email
+                        expiry_date=current_expiry or "（未获取到）"
                     )
                 )
 
@@ -638,9 +594,8 @@ def main():
             if not session_token and not discord_token:
                 print(f"⚠️ 账号 {idx} 缺少 session_token 和 discord_token，跳过")
                 continue
-            account_label = acc.get("label", email or f"账号{idx}")
-            print(f"\n--- 处理账号 {idx}: {account_label} ---")
-            process_account(email, session_token, discord_token, account_label)
+            print(f"\n--- 处理账号 {idx}: {email} ---")
+            process_account(email, session_token, discord_token)
             delay = random.randint(5, 15)
             print(f"⏳ 等待 {delay} 秒后处理下一个账号...")
             time.sleep(delay)
