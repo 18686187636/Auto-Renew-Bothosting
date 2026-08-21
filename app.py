@@ -457,8 +457,17 @@ def run_for_account(email, session_token, discord_token, account_label=""):
             turnstile_passed = False
             for attempt in range(1, 4):
                 try:
-                    sb.uc_click_captcha()
-                    time.sleep(12)
+                    # 尝试多种方法点击 Turnstile（兼容不同版本）
+                    if hasattr(sb, 'click_captcha'):
+                        sb.click_captcha()
+                    elif hasattr(sb, 'uc_click_captcha'):
+                        sb.uc_click_captcha()
+                    else:
+                        # 手动点击 iframe 内的 checkbox
+                        sb.switch_to_frame("iframe[title*='captcha']")
+                        sb.click('input[type="checkbox"]')
+                        sb.switch_to_default_content()
+                    time.sleep(3)  # 点击后短暂等待
                 except Exception as e:
                     print(f"⚠️ 点击 Turnstile 出错: {e}")
 
