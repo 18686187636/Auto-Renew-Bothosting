@@ -20,10 +20,6 @@ if DISCORD_TOKEN:
     _parts = DISCORD_TOKEN.split(",", 1)
     DC_TOKEN = _parts[-1].strip()
 
-if not SESSION_TOKEN and not DC_TOKEN:
-    print("ℹ️ 未配置 SESSION_TOKEN 和 DISCORD_TOKEN,脚本终止。")
-    sys.exit(1)
-
 # 构造cookie
 COOKIES = {
     "session_token": SESSION_TOKEN,
