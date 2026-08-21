@@ -30,9 +30,10 @@ COOKIES = {
 # 记录本次登录方式（用于通知）
 _LOGIN_METHOD = "SESSION_TOKEN"
 
-# ---------- 所有核心函数（完全保留原样） ----------
+# ---------- 所有核心函数（完全保留原样，仅修改 cookie 操作方法） ----------
 def get_cookie_info(sb, name):
-    cookies = sb.get_cookies()   # 保持原调用方式
+    # 改用 driver.get_cookies() 以确保兼容性
+    cookies = sb.driver.get_cookies()
     for c in cookies:
         if c.get('name') == name:
             value = c.get('value')
@@ -87,12 +88,11 @@ def send_telegram_message(message: str):
     except Exception as e:
         print(f"❌ Telegram 发送失败: {e}")
 
-# 修改：增加 account_label 参数（默认空字符串，兼容旧调用）
+# 增加 account_label 参数
 def format_notification(status: str, extra: str = "", error: str = "", expiry_date: str = "", account_label: str = ""):
     local_time = time.gmtime(time.time() + 8 * 3600)
     now = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
     
-    # 优先使用 account_label，否则从 EMAIL 掩码
     if account_label:
         account_prefix = f"👤 {account_label}"
     else:
@@ -306,11 +306,10 @@ def do_discord_login(sb) -> bool:
     sb.save_screenshot("login_timeout.png")
     return False
 
-# ---------- 处理单个账号的函数（原 main 主体） ----------
+# ---------- 处理单个账号的函数（原 main 主体，仅修改 cookie 注入方式） ----------
 def process_account(email, session_token, discord_token, account_label=""):
     global _LOGIN_METHOD, SESSION_TOKEN, DISCORD_TOKEN, EMAIL, COOKIES, DC_TOKEN, GH_TOKEN
 
-    # 设置当前账号的全局变量
     EMAIL = email
     SESSION_TOKEN = session_token
     DISCORD_TOKEN = discord_token
@@ -360,7 +359,8 @@ def process_account(email, session_token, discord_token, account_label=""):
             print("📝 注入 Cookie...")
             for name, value in COOKIES.items():
                 if value:
-                    sb.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
+                    # 使用 driver.add_cookie 替代 add_cookie
+                    sb.driver.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
 
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
             sb.open("https://bot-hosting.net/a/billings")
@@ -455,7 +455,7 @@ def process_account(email, session_token, discord_token, account_label=""):
             try:
                 sb.sleep(2)
                 sb.click(outer_renew_selector)
-                sb.sleep(15)  # 等待模态框加载，可能因网络因素加载慢
+                sb.sleep(15)  # 等待模态框加载
             except Exception as e:
                 print(f"❌ 点击外部按钮失败: {e}")
                 send_telegram_message(format_notification(
