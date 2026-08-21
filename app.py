@@ -30,9 +30,8 @@ COOKIES = {
 # 记录本次登录方式（用于通知）
 _LOGIN_METHOD = "SESSION_TOKEN"
 
-# ---------- 所有核心函数（完全保留原样，仅修改 cookie 操作方法） ----------
+# ---------- 所有核心函数 ----------
 def get_cookie_info(sb, name):
-    # 改用 driver.get_cookies() 以确保兼容性
     cookies = sb.driver.get_cookies()
     for c in cookies:
         if c.get('name') == name:
@@ -88,7 +87,6 @@ def send_telegram_message(message: str):
     except Exception as e:
         print(f"❌ Telegram 发送失败: {e}")
 
-# 增加 account_label 参数
 def format_notification(status: str, extra: str = "", error: str = "", expiry_date: str = "", account_label: str = ""):
     local_time = time.gmtime(time.time() + 8 * 3600)
     now = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
@@ -306,7 +304,7 @@ def do_discord_login(sb) -> bool:
     sb.save_screenshot("login_timeout.png")
     return False
 
-# ---------- 处理单个账号的函数（原 main 主体，仅修改 cookie 注入方式） ----------
+# ---------- 处理单个账号的函数 ----------
 def process_account(email, session_token, discord_token, account_label=""):
     global _LOGIN_METHOD, SESSION_TOKEN, DISCORD_TOKEN, EMAIL, COOKIES, DC_TOKEN, GH_TOKEN
 
@@ -359,7 +357,6 @@ def process_account(email, session_token, discord_token, account_label=""):
             print("📝 注入 Cookie...")
             for name, value in COOKIES.items():
                 if value:
-                    # 使用 driver.add_cookie 确保兼容性
                     sb.driver.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
 
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
@@ -464,6 +461,24 @@ def process_account(email, session_token, discord_token, account_label=""):
                     account_label=account_label or email
                 ))
                 return
+
+            # ============ 新增：检测弹窗中的倒计时 ============
+            modal_text = sb.get_page_source()
+            match = re.search(r"Renew in (\d{2}:\d{2}:\d{2})", modal_text)
+            if match:
+                modal_countdown = match.group(1)
+                print(f"⏳ 弹窗中检测到倒计时: {modal_countdown}，未到续期时间")
+                friendly = format_countdown(modal_countdown)
+                send_telegram_message(
+                    format_notification(
+                        "⏳ 未到续期时间",
+                        extra=f"⏱️ 可续期时间: {friendly}后",
+                        expiry_date=current_expiry or "（未获取到）",
+                        account_label=account_label or email
+                    )
+                )
+                return  # 直接退出，不再继续
+            # ================================================
 
             # 处理弹窗中的 Turnstile
             print("🔒 检测弹窗中的 Turnstile 验证...")
