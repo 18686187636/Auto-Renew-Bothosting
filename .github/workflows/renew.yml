@@ -42,16 +42,18 @@ jobs:
         run: |
           echo "当前处理账号: $EMAIL"
           echo "SESSION_TOKEN 前10位: ${SESSION_TOKEN:0:10}..."
-      - name: "代理设置（强制）"
+          echo "作业数量: ${{ strategy.matrix.account }}"
+      - name: "代理设置（可选）"
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
           if [ -z "$NODE_LINK" ]; then
-            echo "⚠️ NODE_LINK 未设置，代理无法启动"
-            exit 1
+            echo "⚠️ NODE_LINK 未设置，将不使用代理，尝试直连"
+            export IS_PROXY=false
+          else
+            bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
+            sleep 10
           fi
-          bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
-          sleep 10
       - name: "运行续期"
         run: |
           echo "代理状态: $IS_PROXY, 代理地址: $PROXY_SERVER"
