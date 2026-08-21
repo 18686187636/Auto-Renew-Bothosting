@@ -7,12 +7,12 @@ from datetime import datetime
 from seleniumbase import SB
 
 # 环境变量配置(可以直接私库在双引号里填写)
-EMAIL         = os.environ.get("EMAIL") or ""           # 邮箱,只用于通知使用，可随意填写
-SESSION_TOKEN = os.environ.get("SESSION_TOKEN") or ""   # session token，默认登录方式,非必须
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") or ""   # Discord Token 备用登录方式, 失败时才使用,必须填写
-GH_TOKEN      = os.environ.get("GH_TOKEN") or ""        # GitHub PAT token,用于自动更新session token,可选
-TG_CHAT_ID    = os.environ.get("TG_CHAT_ID") or ""      # TG chat id,不填写不通知，需和bot token一起填写生效
-TG_BOT_TOKEN  = os.environ.get("TG_BOT_TOKEN") or ""    # TG bot token 
+EMAIL         = os.environ.get("EMAIL") or ""           
+SESSION_TOKEN = os.environ.get("SESSION_TOKEN") or ""   
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") or ""   
+GH_TOKEN      = os.environ.get("GH_TOKEN") or ""        
+TG_CHAT_ID    = os.environ.get("TG_CHAT_ID") or ""      
+TG_BOT_TOKEN  = os.environ.get("TG_BOT_TOKEN") or ""    
 
 # 解析 DISCORD_TOKEN
 DC_TOKEN = ""
@@ -30,9 +30,9 @@ COOKIES = {
 # 记录本次登录方式（用于通知）
 _LOGIN_METHOD = "SESSION_TOKEN"
 
-# ---------- 所有核心函数（仅修改 cookie 操作方法） ----------
+# ---------- 所有核心函数（与单账号成功版本完全一致，仅将 cookie 操作改为 driver 版本以确保兼容） ----------
 def get_cookie_info(sb, name):
-    cookies = sb.driver.get_cookies()  # 改为 driver 版本
+    cookies = sb.driver.get_cookies()
     for c in cookies:
         if c.get('name') == name:
             value = c.get('value')
@@ -299,7 +299,7 @@ def do_discord_login(sb) -> bool:
     sb.save_screenshot("login_timeout.png")
     return False
 
-# ---------- 处理单个账号的函数（原 main 主体，仅修改 cookie 注入） ----------
+# ---------- 处理单个账号的函数（原 main 主体，仅增加弹窗倒计时检测） ----------
 def process_account(email, session_token, discord_token):
     global _LOGIN_METHOD, SESSION_TOKEN, DISCORD_TOKEN, EMAIL, COOKIES, DC_TOKEN
 
@@ -352,7 +352,7 @@ def process_account(email, session_token, discord_token):
             print("📝 注入 Cookie...")
             for name, value in COOKIES.items():
                 if value:
-                    sb.driver.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})  # 改为 driver 版本
+                    sb.driver.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
 
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
             sb.open("https://bot-hosting.net/a/billings")
@@ -443,11 +443,28 @@ def process_account(email, session_token, discord_token):
             try:
                 sb.sleep(2)
                 sb.click(outer_renew_selector)
-                sb.sleep(15)
+                sb.sleep(15)  # 等待模态框加载
             except Exception as e:
                 print(f"❌ 点击外部按钮失败: {e}")
                 send_telegram_message(format_notification("❌ 续期失败", error="点击外部续期按钮出错"))
                 return
+
+            # ===== 新增：检测弹窗中的倒计时 =====
+            modal_text = sb.get_page_source()
+            match = re.search(r"Renew in (\d{2}:\d{2}:\d{2})", modal_text)
+            if match:
+                modal_countdown = match.group(1)
+                print(f"⏳ 弹窗中检测到倒计时: {modal_countdown}，未到续期时间")
+                friendly = format_countdown(modal_countdown)
+                send_telegram_message(
+                    format_notification(
+                        "⏳ 未到续期时间",
+                        extra=f"⏱️ 可续期时间: {friendly}后",
+                        expiry_date=current_expiry or "（未获取到）"
+                    )
+                )
+                return  # 直接退出，不再继续
+            # =================================
 
             # 处理弹窗中的 Turnstile
             print("🔒 检测弹窗中的 Turnstile 验证...")
