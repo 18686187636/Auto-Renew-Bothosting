@@ -184,7 +184,7 @@ def extract_expiry_date(page_source: str) -> str:
             return date_str
     return None
 
-# Discord OAuth 相关函数（未改动，略）...
+# Discord OAuth 相关函数
 DISCORD_CLIENT_ID   = "884382422530158623"
 OAUTH_REDIRECT_URI  = "https://bot-hosting.net/login"
 OAUTH_SCOPE         = "identify email guilds"
@@ -468,9 +468,7 @@ def run_for_account(email, session_token, discord_token, account_label=""):
                 ))
                 return
 
-            # ----- 新增：检查弹窗中是否已有倒计时 -----
-            modal_countdown = None
-            # 弹窗中的倒计时通常出现在特定容器内
+            # 检查弹窗中是否已有倒计时（若存在则说明未到续期时间）
             modal_text = sb.get_page_source()
             match = re.search(r"Renew in (\d{2}:\d{2}:\d{2})", modal_text)
             if match:
@@ -485,18 +483,17 @@ def run_for_account(email, session_token, discord_token, account_label=""):
                         account_label=account_label or email
                     )
                 )
-                # 直接退出，不再继续
-                return
+                return  # 直接退出，不再继续
 
-            # 如果没有倒计时，继续处理 Turnstile
+            # 没有倒计时，处理 Turnstile 验证
             print("🔒 检测弹窗中的 Turnstile 验证...")
             turnstile_passed = False
-            # 先检查 Turnstile iframe 是否存在
-            if sb.is_element_present("iframe[src*='challenges.cloudflare.com']", timeout=5):
+
+            # 使用 wait_for_element_present 检测 iframe（修正 timeout 参数）
+            if sb.wait_for_element_present("iframe[src*='challenges.cloudflare.com']", timeout=5):
                 # 存在 Turnstile，尝试点击
                 for attempt in range(1, 4):
                     try:
-                        # 使用内置方法
                         if hasattr(sb, 'click_captcha'):
                             sb.click_captcha()
                         elif hasattr(sb, 'uc_click_captcha'):
@@ -517,7 +514,6 @@ def run_for_account(email, session_token, discord_token, account_label=""):
                         break
                     else:
                         print(f"⏳ 第 {attempt} 次未通过，重试点击...")
-                        # 刷新页面（如果可能）
                         try:
                             sb.refresh()
                             time.sleep(5)
@@ -548,6 +544,10 @@ def run_for_account(email, session_token, discord_token, account_label=""):
 
             print("⏳ 等待新的过期时间...")
             sb.sleep(8)
+
+            # 刷新页面获取最新状态
+            sb.refresh()
+            sb.sleep(3)
 
             new_page_text = sb.get_page_source()
             new_expiry = extract_expiry_date(new_page_text)
