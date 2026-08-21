@@ -1,4 +1,4 @@
-name: Auto Renew Bot-hosting
+name: Auto Renew Bot-hosting (Matrix)
 
 on:
   schedule:
@@ -8,13 +8,32 @@ on:
 jobs:
   renew:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        account: ${{ fromJSON(secrets.ACCOUNTS) }}
+      max-parallel: 2
+    env:
+      # 为每个作业设置环境变量，供单账号脚本使用
+      EMAIL: ${{ matrix.account.email }}
+      SESSION_TOKEN: ${{ matrix.account.session_token }}
+      DISCORD_TOKEN: ${{ matrix.account.discord_token }}
+      GH_TOKEN: ''   # 多作业时禁用更新
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      HEADLESS: 'true'
+      # 代理相关：从 Secrets 读取，若无则设默认值（在 run 中处理）
+      IS_PROXY: ${{ secrets.IS_PROXY }}
+      PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+
     steps:
       - uses: actions/checkout@v6
+
       - name: 设置 Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: 安装依赖
+
+      - name: 安装系统依赖、Chrome 和 Python 包
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb x11-utils xdotool scrot fonts-noto-cjk jq wget
@@ -24,6 +43,12 @@ jobs:
           sudo apt-get install -y google-chrome-stable
           pip install seleniumbase==4.20.0 requests==2.31.0
           seleniumbase install chromedriver
+
+      - name: 调试矩阵（打印账号信息）
+        run: |
+          echo "当前处理账号: $EMAIL"
+          echo "SESSION_TOKEN 前10位: ${SESSION_TOKEN:0:10}..."
+
       - name: 代理设置（可选）
         if: env.IS_PROXY == 'true'
         env:
@@ -33,16 +58,24 @@ jobs:
             bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
             sleep 10
           fi
+
       - name: 运行续期
-        env:
-          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS }}  # 注意 Secret 名称是 ACCOUNTS，但脚本读取 ACCOUNTS_JSON
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          HEADLESS: 'true'
-          GH_TOKEN: ''   # 禁用更新
-          IS_PROXY: ${{ secrets.IS_PROXY }}
-          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
         run: |
-          if [ -z "$IS_PROXY" ]; then export IS_PROXY=false; fi
-          if [ -z "$PROXY_SERVER" ]; then export PROXY_SERVER=socks5://127.0.0.1:1080; fi
+          # 设置默认值（如果未设置）
+          if [ -z "$IS_PROXY" ]; then
+            export IS_PROXY=false
+          fi
+          if [ -z "$PROXY_SERVER" ]; then
+            export PROXY_SERVER=socks5://127.0.0.1:1080
+          fi
+          echo "代理状态: $IS_PROXY, 代理地址: $PROXY_SERVER"
           xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" python3 app.py
+
+      - name: 清理
+        if: always()
+        run: |
+          pkill -f sing-box || true
+          pkill -f chromedriver || true
+          pkill -f chrome || true
+          pkill -f Xvfb || true
+          rm -f sing-box sing-box-config.json sing-box.log
