@@ -6,7 +6,7 @@ import urllib.request, urllib.parse, urllib.error
 from datetime import datetime
 from seleniumbase import SB
 
-# 环境变量配置(可以直接私库在双引号里填写)
+# 环境变量配置
 EMAIL         = os.environ.get("EMAIL") or ""           
 SESSION_TOKEN = os.environ.get("SESSION_TOKEN") or ""   
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") or ""   
@@ -27,10 +27,9 @@ COOKIES = {
     "theme": "system",
 }
 
-# 记录本次登录方式（用于通知）
 _LOGIN_METHOD = "SESSION_TOKEN"
 
-# ---------- 所有核心函数（与单账号成功版本完全一致，仅将 cookie 操作改为 driver 版本以确保兼容） ----------
+# ---------- 核心函数（与单账号成功版本完全一致，仅 cookie 用 driver 版本） ----------
 def get_cookie_info(sb, name):
     cookies = sb.driver.get_cookies()
     for c in cookies:
@@ -299,7 +298,7 @@ def do_discord_login(sb) -> bool:
     sb.save_screenshot("login_timeout.png")
     return False
 
-# ---------- 处理单个账号的函数（原 main 主体，仅增加弹窗倒计时检测） ----------
+# ---------- 处理单个账号 ----------
 def process_account(email, session_token, discord_token):
     global _LOGIN_METHOD, SESSION_TOKEN, DISCORD_TOKEN, EMAIL, COOKIES, DC_TOKEN
 
@@ -342,7 +341,7 @@ def process_account(email, session_token, discord_token):
 
         login_ok = False
 
-        # 方式1: SESSION_TOKEN Cookie 登录（默认）
+        # 方式1: SESSION_TOKEN Cookie 登录
         if SESSION_TOKEN:
             print("🚀 启动浏览器...")
             sb.open("https://bot-hosting.net/")
@@ -434,7 +433,7 @@ def process_account(email, session_token, discord_token):
                         outer_renew_selector = selector
                         print(f"✅ 续期按钮可用: '{button_text}'")
                         break
-            except Exception as e:
+            except Exception:
                 pass
 
         # 点击外部续期按钮等待弹窗
@@ -491,10 +490,8 @@ def process_account(email, session_token, discord_token):
             print("⏳ 等待续期按钮可用并点击...")
             time.sleep(5)
 
-            modal_button_clicked = False
             try:
                 sb.click('button:contains("Renew for 4 days")', timeout=8)
-                modal_button_clicked = True
                 print("✅ 已点击续期按钮")
             except Exception as e:
                 print(f"续期按钮点击失败: {e}")
@@ -584,7 +581,6 @@ def process_account(email, session_token, discord_token):
 
 # ---------- 主入口（支持多账号） ----------
 def main():
-    # 检查是否配置了多账号 JSON
     accounts_json = os.environ.get("ACCOUNTS_JSON", "").strip()
     if accounts_json:
         try:
@@ -595,9 +591,8 @@ def main():
             print(f"❌ 解析 ACCOUNTS_JSON 失败: {e}")
             sys.exit(1)
 
-        # 多账号模式：禁用 GH_TOKEN 以避免互相覆盖
         global GH_TOKEN
-        GH_TOKEN = ""
+        GH_TOKEN = ""  # 多账号下禁用
         print(f"👥 检测到 {len(accounts)} 个账号，开始循环续期")
         for idx, acc in enumerate(accounts, 1):
             email = acc.get("email", "")
@@ -612,7 +607,7 @@ def main():
             print(f"⏳ 等待 {delay} 秒后处理下一个账号...")
             time.sleep(delay)
     else:
-        # 单账号模式（原逻辑）
+        # 单账号模式
         email = os.environ.get("EMAIL") or ""
         session_token = os.environ.get("SESSION_TOKEN") or ""
         discord_token = os.environ.get("DISCORD_TOKEN") or ""
