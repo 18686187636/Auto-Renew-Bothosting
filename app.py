@@ -457,7 +457,7 @@ def run_for_account(email, session_token, discord_token, account_label=""):
             turnstile_passed = False
             for attempt in range(1, 4):
                 try:
-                    sb.uc_gui_click_captcha()
+                    sb.uc_click_captcha()
                     time.sleep(12)
                 except Exception as e:
                     print(f"⚠️ 点击 Turnstile 出错: {e}")
