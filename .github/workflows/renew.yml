@@ -3,24 +3,28 @@ name: Auto Renew Bot-hosting (Matrix)
 on:
   schedule:
     - cron: '0 1 * * *'   # 每天 UTC 1:00 (北京时间 9:00)
-  workflow_dispatch:
+  workflow_dispatch:       # 允许手动触发
 
 jobs:
   renew:
     runs-on: ubuntu-latest
+    # 矩阵策略：从 Secrets.ACCOUNTS 解析账号列表，每个账号生成一个并行作业
     strategy:
       matrix:
         account: ${{ fromJSON(secrets.ACCOUNTS) }}
+      # 可选：限制最大并行数，避免资源冲突
       max-parallel: 2
+    # 为每个作业设置环境变量（直接从矩阵元素提取）
     env:
       EMAIL: ${{ matrix.account.email }}
       SESSION_TOKEN: ${{ matrix.account.session_token }}
       DISCORD_TOKEN: ${{ matrix.account.discord_token }}
-      GH_TOKEN: ''   # 多账号下禁用更新
+      # 多账号模式禁止更新 GitHub Secret（避免互相覆盖）
+      GH_TOKEN: ''   # 置空，脚本会跳过更新
       TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      # 更健壮的默认值处理
-      IS_PROXY: ${{ secrets.IS_PROXY == 'true' && 'true' || 'false' }}
+      # 代理相关（如需代理，请设置 IS_PROXY 和 PROXY_SERVER）
+      IS_PROXY: ${{ secrets.IS_PROXY || 'false' }}
       PROXY_SERVER: ${{ secrets.PROXY_SERVER || 'socks5://127.0.0.1:1080' }}
       HEADLESS: 'true'
 
@@ -44,6 +48,7 @@ jobs:
           pip install seleniumbase==4.20.0 requests==2.31.0
           seleniumbase install chromedriver
 
+      # 可选：代理设置（sing-box），每个作业独立启动代理
       - name: ⚙️ 设置代理 (sing-box)
         if: env.IS_PROXY == 'true'
         env:
