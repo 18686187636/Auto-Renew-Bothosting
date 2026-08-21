@@ -1,8 +1,8 @@
-name: Auto Renew Bot-hosting (Matrix)
+name: "Auto Renew Bot-hosting (Matrix)"
 
 on:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: "0 1 * * *"
   workflow_dispatch:
 
 jobs:
@@ -16,23 +16,21 @@ jobs:
       EMAIL: ${{ matrix.account.email }}
       SESSION_TOKEN: ${{ matrix.account.session_token }}
       DISCORD_TOKEN: ${{ matrix.account.discord_token }}
-      GH_TOKEN: ''   # 多作业时禁用更新
+      GH_TOKEN: ""   # 多作业时禁用更新
       TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      HEADLESS: 'true'
-      # 硬编码代理设置
-      IS_PROXY: 'true'
-      PROXY_SERVER: 'socks5://127.0.0.1:1080'
-
+      HEADLESS: "true"
+      IS_PROXY: "true"
+      PROXY_SERVER: "socks5://127.0.0.1:1080"
     steps:
       - uses: actions/checkout@v6
 
-      - name: 设置 Python
+      - name: "设置 Python"
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - name: 安装系统依赖、Chrome 和 Python 包
+      - name: "安装系统依赖、Chrome 和 Python 包"
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb x11-utils xdotool scrot fonts-noto-cjk jq wget
@@ -43,12 +41,12 @@ jobs:
           pip install seleniumbase==4.20.0 requests==2.31.0
           seleniumbase install chromedriver
 
-      - name: 调试矩阵（打印账号信息）
+      - name: "调试矩阵（打印账号信息）"
         run: |
           echo "当前处理账号: $EMAIL"
           echo "SESSION_TOKEN 前10位: ${SESSION_TOKEN:0:10}..."
 
-      - name: 代理设置（强制）
+      - name: "代理设置（强制）"
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
@@ -59,12 +57,12 @@ jobs:
           bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
           sleep 10
 
-      - name: 运行续期
+      - name: "运行续期"
         run: |
           echo "代理状态: $IS_PROXY, 代理地址: $PROXY_SERVER"
           xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" python3 app.py
 
-      - name: 清理
+      - name: "清理"
         if: always()
         run: |
           pkill -f sing-box || true
