@@ -489,8 +489,8 @@ def run_for_account(email, session_token, discord_token, account_label=""):
             print("🔒 检测弹窗中的 Turnstile 验证...")
             turnstile_passed = False
 
-            # 使用 wait_for_element_present 检测 iframe（修正 timeout 参数）
-            if sb.wait_for_element_present("iframe[src*='challenges.cloudflare.com']", timeout=5):
+            # 使用 is_element_present 直接检测 iframe（不再使用 wait_for_element_present）
+            if sb.is_element_present("iframe[src*='challenges.cloudflare.com']"):
                 # 存在 Turnstile，尝试点击
                 for attempt in range(1, 4):
                     try:
