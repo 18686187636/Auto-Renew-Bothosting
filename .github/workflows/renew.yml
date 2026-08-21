@@ -1,23 +1,32 @@
-name: Auto Renew Bot-hosting (Multi-Account via Matrix)
+name: Auto Renew Bot-hosting (Matrix)
 
 on:
   schedule:
-    - cron: '0 1 * * *'
-  workflow_dispatch:
+    - cron: '0 1 * * *'   # 每天 UTC 1:00 (北京时间 9:00)
+  workflow_dispatch:       # 允许手动触发
 
 jobs:
   renew:
     runs-on: ubuntu-latest
+    # 矩阵策略：从 Secrets.ACCOUNTS 解析账号列表，每个账号生成一个并行作业
     strategy:
-      fail-fast: false   # 允许其他账号继续运行，即使某个失败
       matrix:
-        # 从 secrets.ACCOUNTS_JSON 解析账号列表，并构建矩阵
-        # 使用 fromJSON 将 JSON 数组转换为 GitHub Actions 矩阵
-        account: ${{ fromJSON(secrets.ACCOUNTS_JSON) }}
-
-    permissions:
-      actions: write
-      contents: read
+        account: ${{ fromJSON(secrets.ACCOUNTS) }}
+      # 可选：限制最大并行数，避免资源冲突
+      max-parallel: 2
+    # 为每个作业设置环境变量（直接从矩阵元素提取）
+    env:
+      EMAIL: ${{ matrix.account.email }}
+      SESSION_TOKEN: ${{ matrix.account.session_token }}
+      DISCORD_TOKEN: ${{ matrix.account.discord_token }}
+      # 多账号模式禁止更新 GitHub Secret（避免互相覆盖）
+      GH_TOKEN: ''   # 置空，脚本会跳过更新
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      # 代理相关（如需代理，请设置 IS_PROXY 和 PROXY_SERVER）
+      IS_PROXY: ${{ secrets.IS_PROXY || 'false' }}
+      PROXY_SERVER: ${{ secrets.PROXY_SERVER || 'socks5://127.0.0.1:1080' }}
+      HEADLESS: 'true'
 
     steps:
       - name: 📥 检出代码
@@ -36,37 +45,25 @@ jobs:
           sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
-          pip install seleniumbase requests
+          pip install seleniumbase==4.20.0 requests==2.31.0
           seleniumbase install chromedriver
 
+      # 可选：代理设置（sing-box），每个作业独立启动代理
       - name: ⚙️ 设置代理 (sing-box)
-        continue-on-error: true
+        if: env.IS_PROXY == 'true'
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
           if [ -z "$NODE_LINK" ]; then
-            echo "ℹ️ NODE_LINK 未设置，将不使用代理"
-            echo "IS_PROXY=false" >> $GITHUB_ENV
+            echo "ℹ️ NODE_LINK 未设置，跳过代理"
             exit 0
           fi
           bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
           sleep 10
-          echo "✅ 代理已启动（由 setup_proxy.sh 确认）"
-          echo "IS_PROXY=true" >> $GITHUB_ENV
 
-      - name: 🚀 运行续期脚本（单账号）
-        env:
-          EMAIL: ${{ matrix.account.email }}
-          SESSION_TOKEN: ${{ matrix.account.session_token }}
-          DISCORD_TOKEN: ${{ matrix.account.discord_token }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          HEADLESS: 'true'
-          IS_PROXY: ${{ env.IS_PROXY || 'false' }}
-          PROXY_SERVER: 'socks5://127.0.0.1:1080'   # 根据代理实际协议调整
+      - name: 🚀 运行续期脚本（账号: ${{ matrix.account.email }}）
         run: |
-          echo "代理状态: IS_PROXY=$IS_PROXY"
+          echo "开始处理账号: $EMAIL"
           xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" python3 app.py
 
       - name: 🧽 清理进程和临时文件
@@ -77,18 +74,3 @@ jobs:
           pkill -f chrome || true
           pkill -f Xvfb || true
           rm -f sing-box sing-box-config.json sing-box.log
-
-      - name: 🧹 清理旧运行记录
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          runs=$(gh run list --workflow="${{ github.workflow }}" --limit=100 --json databaseId --jq '.[].databaseId')
-          count=0
-          for run_id in $runs; do
-            count=$((count + 1))
-            if [ $count -gt 1 ]; then
-              echo "删除运行记录: $run_id"
-              gh run delete $run_id || true
-            fi
-          done
