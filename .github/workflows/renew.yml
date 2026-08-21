@@ -1,26 +1,20 @@
-name: Auto Renew Bot-hosting (Matrix)
+name: Auto Renew Bot-hosting
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: '0 1 * * *'
-  workflow_dispatch:
 
 jobs:
   renew:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        account: ${{ fromJSON(secrets.ACCOUNTS) }}
-      max-parallel: 2   # 限制并发，避免资源争抢
     steps:
       - uses: actions/checkout@v6
-
       - name: 设置 Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - name: 安装系统依赖、Chrome 和 Python 包
+      - name: 安装依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb x11-utils xdotool scrot fonts-noto-cjk jq wget
@@ -30,7 +24,6 @@ jobs:
           sudo apt-get install -y google-chrome-stable
           pip install seleniumbase==4.20.0 requests==2.31.0
           seleniumbase install chromedriver
-
       - name: 代理设置（可选）
         if: env.IS_PROXY == 'true'
         env:
@@ -40,27 +33,14 @@ jobs:
             bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
             sleep 10
           fi
-
-      - name: 运行续期（账号: ${{ matrix.account.email }}）
+      - name: 运行续期
         env:
-          EMAIL: ${{ matrix.account.email }}
-          SESSION_TOKEN: ${{ matrix.account.session_token }}
-          DISCORD_TOKEN: ${{ matrix.account.discord_token }}
-          GH_TOKEN: ''   # 多作业时禁止更新 Secret
+          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           HEADLESS: 'true'
-          IS_PROXY: ${{ secrets.IS_PROXY || 'false' }}
-          PROXY_SERVER: ${{ secrets.PROXY_SERVER || 'socks5://127.0.0.1:1080' }}
+          GH_TOKEN: ''
         run: |
-          echo "处理账号: $EMAIL"
+          if [ -z "$IS_PROXY" ]; then export IS_PROXY=false; fi
+          if [ -z "$PROXY_SERVER" ]; then export PROXY_SERVER=socks5://127.0.0.1:1080; fi
           xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" python3 app.py
-
-      - name: 清理
-        if: always()
-        run: |
-          pkill -f sing-box || true
-          pkill -f chromedriver || true
-          pkill -f chrome || true
-          pkill -f Xvfb || true
-          rm -f sing-box sing-box-config.json sing-box.log
