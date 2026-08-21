@@ -20,6 +20,10 @@ if DISCORD_TOKEN:
     _parts = DISCORD_TOKEN.split(",", 1)
     DC_TOKEN = _parts[-1].strip()
 
+if not SESSION_TOKEN and not DC_TOKEN:
+    print("ℹ️ 未配置 SESSION_TOKEN 和 DISCORD_TOKEN,脚本终止。")
+    sys.exit(1)
+
 # 构造cookie
 COOKIES = {
     "session_token": SESSION_TOKEN,
@@ -30,9 +34,9 @@ COOKIES = {
 # 记录本次登录方式（用于通知）
 _LOGIN_METHOD = "SESSION_TOKEN"
 
-# ---------- 以下所有函数完全与单账号版本一致，未做任何改动 ----------
+# ---------- 所有核心函数（仅修改 cookie 操作方法，其他完全保留） ----------
 def get_cookie_info(sb, name):
-    cookies = sb.get_cookies()
+    cookies = sb.driver.get_cookies()  # 改为 driver 版本
     for c in cookies:
         if c.get('name') == name:
             value = c.get('value')
@@ -299,11 +303,10 @@ def do_discord_login(sb) -> bool:
     sb.save_screenshot("login_timeout.png")
     return False
 
-# ---------- 处理单个账号的函数（原 main 主体，未做任何改动） ----------
+# ---------- 处理单个账号的函数（原 main 主体，仅修改 cookie 注入） ----------
 def process_account(email, session_token, discord_token):
     global _LOGIN_METHOD, SESSION_TOKEN, DISCORD_TOKEN, EMAIL, COOKIES, DC_TOKEN
 
-    # 设置当前账号的凭据（覆盖全局变量）
     EMAIL = email
     SESSION_TOKEN = session_token
     DISCORD_TOKEN = discord_token
@@ -353,7 +356,7 @@ def process_account(email, session_token, discord_token):
             print("📝 注入 Cookie...")
             for name, value in COOKIES.items():
                 if value:
-                    sb.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
+                    sb.driver.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})  # 改为 driver 版本
 
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
             sb.open("https://bot-hosting.net/a/billings")
@@ -444,7 +447,7 @@ def process_account(email, session_token, discord_token):
             try:
                 sb.sleep(2)
                 sb.click(outer_renew_selector)
-                sb.sleep(15)  # 等待模态框加载
+                sb.sleep(15)
             except Exception as e:
                 print(f"❌ 点击外部按钮失败: {e}")
                 send_telegram_message(format_notification("❌ 续期失败", error="点击外部续期按钮出错"))
