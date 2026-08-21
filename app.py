@@ -20,8 +20,6 @@ if DISCORD_TOKEN:
     _parts = DISCORD_TOKEN.split(",", 1)
     DC_TOKEN = _parts[-1].strip()
 
-# ========== 移除了开头的 SESSION_TOKEN/DC_TOKEN 检查 ==========
-
 # 构造cookie
 COOKIES = {
     "session_token": SESSION_TOKEN,
@@ -32,9 +30,9 @@ COOKIES = {
 # 记录本次登录方式（用于通知）
 _LOGIN_METHOD = "SESSION_TOKEN"
 
-# ---------- 以下所有函数完全与单账号版本一致，未做任何改动 ----------
+# ---------- 所有核心函数（仅修改 cookie 操作方法） ----------
 def get_cookie_info(sb, name):
-    cookies = sb.get_cookies()
+    cookies = sb.driver.get_cookies()  # 改为 driver 版本
     for c in cookies:
         if c.get('name') == name:
             value = c.get('value')
@@ -301,7 +299,7 @@ def do_discord_login(sb) -> bool:
     sb.save_screenshot("login_timeout.png")
     return False
 
-# ---------- 处理单个账号的函数（原 main 主体，未做任何改动） ----------
+# ---------- 处理单个账号的函数（原 main 主体，仅修改 cookie 注入） ----------
 def process_account(email, session_token, discord_token):
     global _LOGIN_METHOD, SESSION_TOKEN, DISCORD_TOKEN, EMAIL, COOKIES, DC_TOKEN
 
@@ -354,7 +352,7 @@ def process_account(email, session_token, discord_token):
             print("📝 注入 Cookie...")
             for name, value in COOKIES.items():
                 if value:
-                    sb.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
+                    sb.driver.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})  # 改为 driver 版本
 
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
             sb.open("https://bot-hosting.net/a/billings")
@@ -601,7 +599,6 @@ def main():
         email = os.environ.get("EMAIL") or ""
         session_token = os.environ.get("SESSION_TOKEN") or ""
         discord_token = os.environ.get("DISCORD_TOKEN") or ""
-        # ========== 将原开头的检查移到这里 ==========
         if not session_token and not discord_token:
             print("ℹ️ 未配置 SESSION_TOKEN 和 DISCORD_TOKEN,脚本终止。")
             sys.exit(1)
