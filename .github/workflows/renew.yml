@@ -1,9 +1,9 @@
 name: Auto Renew Bot-hosting
 
 on:
-  workflow_dispatch:
   schedule:
     - cron: '0 1 * * *'
+  workflow_dispatch:
 
 jobs:
   renew:
@@ -35,11 +35,13 @@ jobs:
           fi
       - name: 运行续期
         env:
-          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS }}
+          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS }}  # 注意 Secret 名称是 ACCOUNTS，但脚本读取 ACCOUNTS_JSON
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           HEADLESS: 'true'
-          GH_TOKEN: ''
+          GH_TOKEN: ''   # 禁用更新
+          IS_PROXY: ${{ secrets.IS_PROXY }}
+          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
         run: |
           if [ -z "$IS_PROXY" ]; then export IS_PROXY=false; fi
           if [ -z "$PROXY_SERVER" ]; then export PROXY_SERVER=socks5://127.0.0.1:1080; fi
