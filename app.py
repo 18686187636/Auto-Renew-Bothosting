@@ -30,9 +30,10 @@ COOKIES = {
 # 记录本次登录方式（用于通知）
 _LOGIN_METHOD = "SESSION_TOKEN"
 
-# ---------- 所有核心函数（完全保留原样，包括 cookie 方法） ----------
+# ---------- 所有核心函数（完全保留原样，仅修改 cookie 操作方法） ----------
 def get_cookie_info(sb, name):
-    cookies = sb.get_cookies()   # 保持原调用方式
+    # 改用 driver.get_cookies() 以确保兼容性
+    cookies = sb.driver.get_cookies()
     for c in cookies:
         if c.get('name') == name:
             value = c.get('value')
@@ -305,7 +306,7 @@ def do_discord_login(sb) -> bool:
     sb.save_screenshot("login_timeout.png")
     return False
 
-# ---------- 处理单个账号的函数（原 main 主体，与单账号版本完全一致） ----------
+# ---------- 处理单个账号的函数（原 main 主体，仅修改 cookie 注入方式） ----------
 def process_account(email, session_token, discord_token, account_label=""):
     global _LOGIN_METHOD, SESSION_TOKEN, DISCORD_TOKEN, EMAIL, COOKIES, DC_TOKEN, GH_TOKEN
 
@@ -358,7 +359,8 @@ def process_account(email, session_token, discord_token, account_label=""):
             print("📝 注入 Cookie...")
             for name, value in COOKIES.items():
                 if value:
-                    sb.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})  # 保持单账号方式
+                    # 使用 driver.add_cookie 确保兼容性
+                    sb.driver.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
 
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
             sb.open("https://bot-hosting.net/a/billings")
@@ -468,7 +470,7 @@ def process_account(email, session_token, discord_token, account_label=""):
             turnstile_passed = False
             for attempt in range(1, 4):
                 try:
-                    sb.uc_gui_click_captcha()   # 保持单账号方式
+                    sb.uc_gui_click_captcha()
                     time.sleep(12)
                 except Exception as e:
                     print(f"⚠️ 点击 Turnstile 出错: {e}")
