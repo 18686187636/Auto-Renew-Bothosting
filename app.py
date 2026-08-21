@@ -6,7 +6,7 @@ import urllib.request, urllib.parse, urllib.error
 from datetime import datetime
 from seleniumbase import SB
 
-# 环境变量配置(可以直接私库在双引号里填写)
+# 环境变量配置
 EMAIL         = os.environ.get("EMAIL") or ""           
 SESSION_TOKEN = os.environ.get("SESSION_TOKEN") or ""   
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") or ""   
@@ -14,7 +14,7 @@ GH_TOKEN      = os.environ.get("GH_TOKEN") or ""
 TG_CHAT_ID    = os.environ.get("TG_CHAT_ID") or ""      
 TG_BOT_TOKEN  = os.environ.get("TG_BOT_TOKEN") or ""    
 
-# 解析 DISCORD_TOKEN（全局，仅供单账号模式参考，多账号模式会在 run_for_account 内重新计算）
+# 解析 DISCORD_TOKEN
 DC_TOKEN = ""
 if DISCORD_TOKEN:
     _parts = DISCORD_TOKEN.split(",", 1)
@@ -27,10 +27,9 @@ COOKIES = {
     "theme": "system",
 }
 
-# 记录本次登录方式（用于通知）
 _LOGIN_METHOD = "SESSION_TOKEN"
 
-# ---------- 所有核心函数（未改动） ----------
+# ---------- 核心函数 ----------
 def get_cookie_info(sb, name):
     cookies = sb.driver.get_cookies()
     for c in cookies:
@@ -121,23 +120,23 @@ def format_notification(status: str, extra: str = "", error: str = "", expiry_da
     lines.append(f"⏱️ 登录时间: {now}")
     return "\n".join(lines)
 
-# 改进后的 Turnstile 验证等待函数（检测 iframe 消失或响应生成）
+# 改进后的 Turnstile 验证等待函数
 def wait_for_turnstile_pass(sb, timeout=30):
     start = time.time()
     while time.time() - start < timeout:
-        # 方法1：检查 Turnstile 相关 iframe 是否已从 DOM 移除
+        # 检测 iframe 是否消失
         if not sb.is_element_present("iframe[src*='challenges.cloudflare.com']"):
             print("✅ Turnstile 验证已通过（iframe 消失）")
             return True
-        # 方法2：检查是否存在隐藏的 response 输入（部分网站会生成）
+        # 检测是否存在隐藏的 response 输入
         if sb.is_element_present("input[name='cf-turnstile-response']"):
             print("✅ Turnstile 验证已通过（发现响应字段）")
             return True
-        # 方法3：检查是否出现验证成功后的页面元素（如账单内容）
+        # 检测账单内容是否可见（强信号）
         if sb.is_element_present('.billings-card') or sb.is_element_present('table[class*="billings"]'):
             print("✅ Turnstile 验证已通过（账单内容可见）")
             return True
-        # 方法4：如果页面不再包含验证相关关键词，也认为通过（原逻辑保留）
+        # 关键词消失
         page_lower = sb.get_page_source().lower()
         if not any(x in page_lower for x in ["verify you are human", "just a moment"]):
             print("✅ Turnstile 验证已通过（关键词消失）")
@@ -185,6 +184,7 @@ def extract_expiry_date(page_source: str) -> str:
             return date_str
     return None
 
+# Discord OAuth 相关函数（未改动，略）...
 DISCORD_CLIENT_ID   = "884382422530158623"
 OAUTH_REDIRECT_URI  = "https://bot-hosting.net/login"
 OAUTH_SCOPE         = "identify email guilds"
@@ -316,7 +316,7 @@ def do_discord_login(sb) -> bool:
     sb.save_screenshot("login_timeout.png")
     return False
 
-# ---------- 单个账号执行流程（原 main 函数体） ----------
+# ---------- 单个账号执行流程 ----------
 def run_for_account(email, session_token, discord_token, account_label=""):
     global _LOGIN_METHOD, SESSION_TOKEN, DISCORD_TOKEN, EMAIL, COOKIES, DC_TOKEN
 
@@ -417,6 +417,7 @@ def run_for_account(email, session_token, discord_token, account_label=""):
         if _LOGIN_METHOD == "Discord Token":
             print("ℹ️ 本次使用 Discord OAuth 登录，新的 SESSION_TOKEN 将自动更新到 Secrets")
 
+        # 提取当前到期日期
         sb.sleep(2)
         page_source = sb.get_page_source()
         current_expiry = extract_expiry_date(page_source)
@@ -425,6 +426,7 @@ def run_for_account(email, session_token, discord_token, account_label=""):
         else:
             print("⚠️ 未能提取当前到期日期")
 
+        # 寻找外部续期按钮
         outer_renew_selector = None
         countdown_text = None
         possible_selectors = [
@@ -448,7 +450,7 @@ def run_for_account(email, session_token, discord_token, account_label=""):
                         outer_renew_selector = selector
                         print(f"✅ 续期按钮可用: '{button_text}'")
                         break
-            except Exception as e:
+            except Exception:
                 pass
 
         if outer_renew_selector:
@@ -456,7 +458,7 @@ def run_for_account(email, session_token, discord_token, account_label=""):
             try:
                 sb.sleep(2)
                 sb.click(outer_renew_selector)
-                sb.sleep(15)  # 等待模态框加载
+                sb.sleep(10)  # 等待弹窗加载
             except Exception as e:
                 print(f"❌ 点击外部按钮失败: {e}")
                 send_telegram_message(format_notification(
@@ -466,46 +468,65 @@ def run_for_account(email, session_token, discord_token, account_label=""):
                 ))
                 return
 
+            # ----- 新增：检查弹窗中是否已有倒计时 -----
+            modal_countdown = None
+            # 弹窗中的倒计时通常出现在特定容器内
+            modal_text = sb.get_page_source()
+            match = re.search(r"Renew in (\d{2}:\d{2}:\d{2})", modal_text)
+            if match:
+                modal_countdown = match.group(1)
+                print(f"⏳ 弹窗中检测到倒计时: {modal_countdown}，未到续期时间")
+                friendly = format_countdown(modal_countdown)
+                send_telegram_message(
+                    format_notification(
+                        "⏳ 未到续期时间",
+                        extra=f"⏱️ 可续期时间: {friendly}后",
+                        expiry_date=current_expiry or "（未获取到）",
+                        account_label=account_label or email
+                    )
+                )
+                # 直接退出，不再继续
+                return
+
+            # 如果没有倒计时，继续处理 Turnstile
             print("🔒 检测弹窗中的 Turnstile 验证...")
             turnstile_passed = False
-            for attempt in range(1, 4):
-                try:
-                    # 策略1：使用 SeleniumBase 内置方法（优先）
-                    if hasattr(sb, 'click_captcha'):
-                        sb.click_captcha()
-                    elif hasattr(sb, 'uc_click_captcha'):
-                        sb.uc_click_captcha()
-                    else:
-                        # 策略2：手动点击 iframe 内的 checkbox
-                        # 先等待 iframe 加载
-                        if sb.wait_for_element_present("iframe[src*='challenges.cloudflare.com']", timeout=10):
+            # 先检查 Turnstile iframe 是否存在
+            if sb.is_element_present("iframe[src*='challenges.cloudflare.com']", timeout=5):
+                # 存在 Turnstile，尝试点击
+                for attempt in range(1, 4):
+                    try:
+                        # 使用内置方法
+                        if hasattr(sb, 'click_captcha'):
+                            sb.click_captcha()
+                        elif hasattr(sb, 'uc_click_captcha'):
+                            sb.uc_click_captcha()
+                        else:
                             sb.switch_to_frame("iframe[src*='challenges.cloudflare.com']")
-                            # 尝试点击 checkbox
                             if sb.is_element_present('input[type="checkbox"]'):
                                 sb.click('input[type="checkbox"]')
                             else:
-                                # 如果没有 checkbox，尝试点击任意可见区域（有时是 div）
                                 sb.click('div[role="checkbox"]')
                             sb.switch_to_default_content()
-                        else:
-                            print("⚠️ Turnstile iframe 未加载，跳过点击")
-                    time.sleep(3)
-                except Exception as e:
-                    print(f"⚠️ 点击 Turnstile 出错: {e}")
-                    # 尝试刷新页面？不推荐
+                        time.sleep(3)
+                    except Exception as e:
+                        print(f"⚠️ 点击 Turnstile 出错: {e}")
 
-                # 等待验证完成
-                if wait_for_turnstile_pass(sb, timeout=20):
-                    turnstile_passed = True
-                    break
-                else:
-                    print(f"⏳ 第 {attempt} 次未通过，重试点击...")
-                    # 尝试重新加载 iframe？可尝试刷新页面
-                    try:
-                        sb.refresh()
-                        time.sleep(5)
-                    except:
-                        pass
+                    if wait_for_turnstile_pass(sb, timeout=20):
+                        turnstile_passed = True
+                        break
+                    else:
+                        print(f"⏳ 第 {attempt} 次未通过，重试点击...")
+                        # 刷新页面（如果可能）
+                        try:
+                            sb.refresh()
+                            time.sleep(5)
+                        except:
+                            pass
+            else:
+                # 没有 Turnstile，直接认为通过
+                print("ℹ️ 未检测到 Turnstile，跳过验证")
+                turnstile_passed = True
 
             if not turnstile_passed:
                 print("❌ Turnstile 验证最终未通过，脚本退出")
@@ -516,6 +537,7 @@ def run_for_account(email, session_token, discord_token, account_label=""):
                 ))
                 return
 
+            # 点击续期按钮
             print("⏳ 等待续期按钮可用并点击...")
             time.sleep(5)
             try:
@@ -525,7 +547,7 @@ def run_for_account(email, session_token, discord_token, account_label=""):
                 print(f"续期按钮点击失败: {e}")
 
             print("⏳ 等待新的过期时间...")
-            sb.sleep(8)  # 延长等待，确保服务器处理
+            sb.sleep(8)
 
             new_page_text = sb.get_page_source()
             new_expiry = extract_expiry_date(new_page_text)
@@ -608,7 +630,7 @@ def run_for_account(email, session_token, discord_token, account_label=""):
 
         print("🏁 账号处理完毕")
 
-# ---------- 新的主入口 ----------
+# ---------- 主入口（支持多账号） ----------
 def main():
     accounts_json = os.environ.get("ACCOUNTS_JSON", "").strip()
     if accounts_json:
@@ -620,7 +642,6 @@ def main():
             print(f"❌ 解析 ACCOUNTS_JSON 失败: {e}")
             sys.exit(1)
 
-        # 多账号模式：禁用自动更新 Secret（避免互相覆盖）
         os.environ["GH_TOKEN"] = ""
         print(f"👥 检测到 {len(accounts)} 个账号，开始循环续期")
         for idx, acc in enumerate(accounts, 1):
@@ -637,7 +658,6 @@ def main():
             print(f"⏳ 等待 {delay} 秒后处理下一个账号...")
             time.sleep(delay)
     else:
-        # 单账号模式（原逻辑）
         email = os.environ.get("EMAIL") or ""
         session_token = os.environ.get("SESSION_TOKEN") or ""
         discord_token = os.environ.get("DISCORD_TOKEN") or ""
