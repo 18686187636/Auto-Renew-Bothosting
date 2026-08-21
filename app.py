@@ -6,13 +6,13 @@ import urllib.request, urllib.parse, urllib.error
 from datetime import datetime
 from seleniumbase import SB
 
-# 环境变量配置
-EMAIL         = os.environ.get("EMAIL") or ""           
-SESSION_TOKEN = os.environ.get("SESSION_TOKEN") or ""   
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") or ""   
-GH_TOKEN      = os.environ.get("GH_TOKEN") or ""        
-TG_CHAT_ID    = os.environ.get("TG_CHAT_ID") or ""      
-TG_BOT_TOKEN  = os.environ.get("TG_BOT_TOKEN") or ""    
+# 环境变量配置(可以直接私库在双引号里填写)
+EMAIL         = os.environ.get("EMAIL") or ""           # 邮箱,只用于通知使用，可随意填写
+SESSION_TOKEN = os.environ.get("SESSION_TOKEN") or ""   # session token，默认登录方式,非必须
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") or ""   # Discord Token 备用登录方式, 失败时才使用,必须填写
+GH_TOKEN      = os.environ.get("GH_TOKEN") or ""        # GitHub PAT token,用于自动更新session token,可选
+TG_CHAT_ID    = os.environ.get("TG_CHAT_ID") or ""      # TG chat id,不填写不通知，需和bot token一起填写生效
+TG_BOT_TOKEN  = os.environ.get("TG_BOT_TOKEN") or ""    # TG bot token 
 
 # 解析 DISCORD_TOKEN
 DC_TOKEN = ""
@@ -27,11 +27,12 @@ COOKIES = {
     "theme": "system",
 }
 
+# 记录本次登录方式（用于通知）
 _LOGIN_METHOD = "SESSION_TOKEN"
 
-# ---------- 核心函数（与单账号成功版本完全一致，仅 cookie 用 driver 版本） ----------
+# ---------- 以下所有函数与您提供的单账号版本完全一致 ----------
 def get_cookie_info(sb, name):
-    cookies = sb.driver.get_cookies()
+    cookies = sb.get_cookies()
     for c in cookies:
         if c.get('name') == name:
             value = c.get('value')
@@ -86,7 +87,7 @@ def send_telegram_message(message: str):
     except Exception as e:
         print(f"❌ Telegram 发送失败: {e}")
 
-def format_notification(status: str, extra: str = "", error: str = "", expiry_date: str = ""):
+def format_notification(status: str, extra: str = "", error: str = "", expiry_date: str = "") -> str:
     local_time = time.gmtime(time.time() + 8 * 3600)
     now = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
     if '@' in EMAIL:
@@ -96,7 +97,7 @@ def format_notification(status: str, extra: str = "", error: str = "", expiry_da
         else:
             masked_email = f"{name}@{domain}"
     else:
-        masked_email = EMAIL[:2] + '****'
+        masked_email = EMAIL[:2] + '****' 
     
     lines = [
         "🇫🇮 Bot-hosting 续期通知",
@@ -166,7 +167,6 @@ def extract_expiry_date(page_source: str) -> str:
             return date_str
     return None
 
-# Discord OAuth 登录（完全保留）
 DISCORD_CLIENT_ID   = "884382422530158623"
 OAUTH_REDIRECT_URI  = "https://bot-hosting.net/login"
 OAUTH_SCOPE         = "identify email guilds"
@@ -298,7 +298,7 @@ def do_discord_login(sb) -> bool:
     sb.save_screenshot("login_timeout.png")
     return False
 
-# ---------- 处理单个账号 ----------
+# ---------- 处理单个账号的函数（从原 main 抽取，未改动任何逻辑） ----------
 def process_account(email, session_token, discord_token):
     global _LOGIN_METHOD, SESSION_TOKEN, DISCORD_TOKEN, EMAIL, COOKIES, DC_TOKEN
 
@@ -341,7 +341,6 @@ def process_account(email, session_token, discord_token):
 
         login_ok = False
 
-        # 方式1: SESSION_TOKEN Cookie 登录
         if SESSION_TOKEN:
             print("🚀 启动浏览器...")
             sb.open("https://bot-hosting.net/")
@@ -351,7 +350,7 @@ def process_account(email, session_token, discord_token):
             print("📝 注入 Cookie...")
             for name, value in COOKIES.items():
                 if value:
-                    sb.driver.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
+                    sb.add_cookie({"name": name, "value": value, "domain": "bot-hosting.net"})
 
             print("🌐 访问 https://bot-hosting.net/a/billings ...")
             sb.open("https://bot-hosting.net/a/billings")
@@ -367,7 +366,6 @@ def process_account(email, session_token, discord_token):
             else:
                 print(f"❌ SESSION_TOKEN 登录失败，当前URL: {current_url}, 当前标题: {current_title}")
 
-        # 方式2: Discord OAuth 登录（备用）
         if not login_ok and DC_TOKEN:
             _LOGIN_METHOD = "Discord Token"
             print("\n🔄 SESSION_TOKEN 登录失败或未配置，尝试 Discord OAuth 登录...")
@@ -400,7 +398,6 @@ def process_account(email, session_token, discord_token):
         if _LOGIN_METHOD == "Discord Token":
             print("ℹ️ 本次使用 Discord OAuth 登录，新的 SESSION_TOKEN 将自动更新到 Secrets")
 
-        # 提取当前到期日期
         sb.sleep(2)
         page_source = sb.get_page_source()
         current_expiry = extract_expiry_date(page_source)
@@ -409,7 +406,6 @@ def process_account(email, session_token, discord_token):
         else:
             print("⚠️ 未能提取当前到期日期")
 
-        # 寻找外部续期按钮
         outer_renew_selector = None
         countdown_text = None
         possible_selectors = [
@@ -433,39 +429,20 @@ def process_account(email, session_token, discord_token):
                         outer_renew_selector = selector
                         print(f"✅ 续期按钮可用: '{button_text}'")
                         break
-            except Exception:
+            except Exception as e:
                 pass
 
-        # 点击外部续期按钮等待弹窗
         if outer_renew_selector:
             print("🔄 点击外部续期按钮，等待验证窗口...")
             try:
                 sb.sleep(2)
                 sb.click(outer_renew_selector)
-                sb.sleep(15)  # 等待模态框加载
+                sb.sleep(15)
             except Exception as e:
                 print(f"❌ 点击外部按钮失败: {e}")
                 send_telegram_message(format_notification("❌ 续期失败", error="点击外部续期按钮出错"))
                 return
 
-            # ===== 新增：检测弹窗中的倒计时 =====
-            modal_text = sb.get_page_source()
-            match = re.search(r"Renew in (\d{2}:\d{2}:\d{2})", modal_text)
-            if match:
-                modal_countdown = match.group(1)
-                print(f"⏳ 弹窗中检测到倒计时: {modal_countdown}，未到续期时间")
-                friendly = format_countdown(modal_countdown)
-                send_telegram_message(
-                    format_notification(
-                        "⏳ 未到续期时间",
-                        extra=f"⏱️ 可续期时间: {friendly}后",
-                        expiry_date=current_expiry or "（未获取到）"
-                    )
-                )
-                return  # 直接退出，不再继续
-            # =================================
-
-            # 处理弹窗中的 Turnstile
             print("🔒 检测弹窗中的 Turnstile 验证...")
             turnstile_passed = False
             for attempt in range(1, 4):
@@ -486,12 +463,13 @@ def process_account(email, session_token, discord_token):
                 send_telegram_message(format_notification("❌ 续期失败", error="Turnstile 验证未通过"))
                 return
 
-            # 点击续期按钮
             print("⏳ 等待续期按钮可用并点击...")
             time.sleep(5)
 
+            modal_button_clicked = False
             try:
                 sb.click('button:contains("Renew for 4 days")', timeout=8)
+                modal_button_clicked = True
                 print("✅ 已点击续期按钮")
             except Exception as e:
                 print(f"续期按钮点击失败: {e}")
@@ -499,7 +477,6 @@ def process_account(email, session_token, discord_token):
             print("⏳ 等待新的过期时间...")
             sb.sleep(6)
 
-            # 提取新的到期日期和倒计时
             new_page_text = sb.get_page_source()
             new_expiry = extract_expiry_date(new_page_text)
             new_match = re.search(r"Renew in (\d{2}:\d{2}:\d{2})", new_page_text)
@@ -556,7 +533,6 @@ def process_account(email, session_token, discord_token):
                     )
                 )
 
-        # 更新SESSION_TOKEN（仅当 GH_TOKEN 有效且非多账号模式时）
         if GH_TOKEN:
             print("🔄 检查 SESSION_TOKEN 是否需要更新")
             new_token, token_expiry = get_cookie_info(sb, "session_token")
@@ -591,8 +567,9 @@ def main():
             print(f"❌ 解析 ACCOUNTS_JSON 失败: {e}")
             sys.exit(1)
 
+        # 多账号模式：禁用 GH_TOKEN 以避免互相覆盖
         global GH_TOKEN
-        GH_TOKEN = ""  # 多账号下禁用
+        GH_TOKEN = ""
         print(f"👥 检测到 {len(accounts)} 个账号，开始循环续期")
         for idx, acc in enumerate(accounts, 1):
             email = acc.get("email", "")
@@ -607,7 +584,7 @@ def main():
             print(f"⏳ 等待 {delay} 秒后处理下一个账号...")
             time.sleep(delay)
     else:
-        # 单账号模式
+        # 单账号模式（原逻辑）
         email = os.environ.get("EMAIL") or ""
         session_token = os.environ.get("SESSION_TOKEN") or ""
         discord_token = os.environ.get("DISCORD_TOKEN") or ""
