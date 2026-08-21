@@ -410,15 +410,42 @@ def process_account(email, session_token, discord_token, account_label=""):
         if _LOGIN_METHOD == "Discord Token":
             print("ℹ️ 本次使用 Discord OAuth 登录，新的 SESSION_TOKEN 将自动更新到 Secrets")
 
-        # 提取当前到期日期
+        # 提取当前到期日期并计算剩余时间
         sb.sleep(2)
         page_source = sb.get_page_source()
         current_expiry = extract_expiry_date(page_source)
         if current_expiry:
             print(f"📅 当前到期日期: {current_expiry}")
+            # 计算剩余时间
+            try:
+                expiry_dt = datetime.strptime(current_expiry, "%Y/%m/%d")
+                now = datetime.now()
+                remaining = expiry_dt - now
+                remaining_hours = remaining.total_seconds() / 3600
+                # 如果剩余时间超过 24 小时，认为未到续期时间
+                if remaining_hours > 24:
+                    days = remaining.days
+                    hours = int((remaining.seconds) / 3600)
+                    if days > 0:
+                        friendly = f"{days}天{hours}小时"
+                    else:
+                        friendly = f"{hours}小时"
+                    print(f"⏳ 距离到期还有 {friendly}，未到续期时间")
+                    send_telegram_message(
+                        format_notification(
+                            "⏳ 未到续期时间",
+                            extra=f"⏱️ 距离到期还有 {friendly}",
+                            expiry_date=current_expiry,
+                            account_label=account_label or email
+                        )
+                    )
+                    return  # 直接退出，不进行续期操作
+            except Exception as e:
+                print(f"⚠️ 解析到期日期失败: {e}")
         else:
             print("⚠️ 未能提取当前到期日期")
 
+        # 如果剩余时间 <= 24 小时，继续续期流程
         # 寻找外部续期按钮
         outer_renew_selector = None
         countdown_text = None
@@ -452,7 +479,7 @@ def process_account(email, session_token, discord_token, account_label=""):
             try:
                 sb.sleep(2)
                 sb.click(outer_renew_selector)
-                sb.sleep(18)  # 增加等待时间，确保弹窗完全加载（原为15秒）
+                sb.sleep(15)  # 等待模态框加载
             except Exception as e:
                 print(f"❌ 点击外部按钮失败: {e}")
                 send_telegram_message(format_notification(
@@ -461,26 +488,6 @@ def process_account(email, session_token, discord_token, account_label=""):
                     account_label=account_label or email
                 ))
                 return
-
-            # ============ 检测弹窗中的倒计时（直接正则搜索） ============
-            modal_text = sb.get_page_source()
-            match = re.search(r"Renew in (\d{2}:\d{2}:\d{2})", modal_text)
-            if match:
-                modal_countdown = match.group(1)
-                print(f"⏳ 弹窗中检测到倒计时: {modal_countdown}，未到续期时间")
-                friendly = format_countdown(modal_countdown)
-                send_telegram_message(
-                    format_notification(
-                        "⏳ 未到续期时间",
-                        extra=f"⏱️ 可续期时间: {friendly}后",
-                        expiry_date=current_expiry or "（未获取到）",
-                        account_label=account_label or email
-                    )
-                )
-                return  # 直接退出，不再继续
-            else:
-                print("ℹ️ 弹窗中未检测到倒计时，继续续期流程")
-            # =========================================================
 
             # 处理弹窗中的 Turnstile
             print("🔒 检测弹窗中的 Turnstile 验证...")
